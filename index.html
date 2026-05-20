@@ -74,6 +74,12 @@ body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:colum
   color:#555;background:#fff;cursor:pointer;font-family:Arial;outline:none}
 .sort-select:focus{border-color:#2E75B6}
 .show-all-btn:hover{background:#2E75B6;color:#fff}
+.carrier-header{flex:0 0 100%;font-size:.73rem;font-weight:700;color:#333;padding:5px 2px 3px;
+  display:flex;align-items:center;gap:5px;cursor:pointer;border-top:1px solid #dde4ee;margin-top:4px;user-select:none}
+.carrier-header.first{border-top:none;margin-top:0}
+.carrier-header:hover{color:var(--blue)}
+.carrier-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;display:inline-block}
+.terminal-chip{margin-left:12px !important}
 .shape-chip{padding:3px 9px;border-radius:10px;font-size:.72rem;font-weight:700;cursor:pointer;
   color:#fff;display:inline-flex;align-items:center;gap:4px;transition:all .15s}
 .shape-chip:hover{opacity:.85}
@@ -631,17 +637,51 @@ function renderShapesBar() {
   const bar = document.getElementById('shapesBar');
   if (!shapes.length) { bar.style.display = 'none'; return; }
   bar.style.display = 'flex';
-  const chips = sortedShapes().map(s => {
-    const count = (shapeZips[s.id] || []).length;
-    const countBadge = count ? ` (${count})` : '';
-    const isFocused = !showAllMode && focusedShapeIds.has(s.id);
-    const isDimmed  = !showAllMode && !focusedShapeIds.has(s.id);
-    const cls = isFocused ? ' focused' : isDimmed ? ' dimmed' : '';
-    return `<span class="shape-chip${cls}" style="background:${s.color}" onclick="focusArea(${s.id})" title="Click to focus this area">
-      ${esc(s.label)}${countBadge}<span class="shape-chip-edit" onclick="renameShape(${s.id},event)" title="Rename">✏</span><span class="shape-chip-edit" onclick="editShapeZips(${s.id},event)" title="Edit ZIP list">📋</span><span class="del" onclick="removeShape(${s.id},event)">✕</span>
-    </span>`;
-  }).join('');
   const showAllActive = showAllMode ? 'active' : '';
+  const hasCarriers = shapes.some(s => s.carrier);
+  let chips = '';
+
+  if (hasCarriers) {
+    // Group terminals under carrier headers
+    const carrierMap = new Map();
+    sortedShapes().forEach(s => {
+      const c = s.carrier || '—';
+      if (!carrierMap.has(c)) carrierMap.set(c, []);
+      carrierMap.get(c).push(s);
+    });
+    let first = true;
+    carrierMap.forEach((cShapes, carrier) => {
+      const color = cShapes[0].color;
+      const allFocused = !showAllMode && cShapes.every(s => focusedShapeIds.has(s.id));
+      chips += `<div class="carrier-header${first?' first':''}" onclick="focusCarrier(${JSON.stringify(carrier)})" title="Click to focus all terminals for this carrier">
+        <span class="carrier-dot" style="background:${color}"></span>
+        <span>${esc(carrier)}</span>
+        <span style="opacity:.5;font-weight:400;font-size:.68rem">(${cShapes.length} terminal${cShapes.length>1?'s':''})</span>
+      </div>`;
+      cShapes.forEach(s => {
+        const count = (shapeZips[s.id] || []).length;
+        const isFocused = !showAllMode && focusedShapeIds.has(s.id);
+        const isDimmed  = !showAllMode && !focusedShapeIds.has(s.id);
+        const cls = isFocused ? ' focused' : isDimmed ? ' dimmed' : '';
+        chips += `<span class="shape-chip terminal-chip${cls}" style="background:${s.color}" onclick="focusArea(${s.id})" title="Click to focus this terminal">
+          ${esc(s.label)} (${count})<span class="del" onclick="removeShape(${s.id},event)">✕</span>
+        </span>`;
+      });
+      first = false;
+    });
+  } else {
+    chips = sortedShapes().map(s => {
+      const count = (shapeZips[s.id] || []).length;
+      const countBadge = count ? ` (${count})` : '';
+      const isFocused = !showAllMode && focusedShapeIds.has(s.id);
+      const isDimmed  = !showAllMode && !focusedShapeIds.has(s.id);
+      const cls = isFocused ? ' focused' : isDimmed ? ' dimmed' : '';
+      return `<span class="shape-chip${cls}" style="background:${s.color}" onclick="focusArea(${s.id})" title="Click to focus this area">
+        ${esc(s.label)}${countBadge}<span class="shape-chip-edit" onclick="renameShape(${s.id},event)" title="Rename">✏</span><span class="shape-chip-edit" onclick="editShapeZips(${s.id},event)" title="Edit ZIP list">📋</span><span class="del" onclick="removeShape(${s.id},event)">✕</span>
+      </span>`;
+    }).join('');
+  }
+
   bar.innerHTML = `
     <div class="shapes-bar-header">
       <span class="shapes-bar-label">Areas on map</span>
@@ -717,6 +757,48 @@ function focusArea(id) {
 
   const names = shapes.filter(s => focusedShapeIds.has(s.id)).map(s => s.label).join(', ');
   setStatus(`Selected: ${names} · ${zipResult.length.toLocaleString()} ZIPs`, 'ok');
+}
+
+function focusCarrier(carrierName) {
+  const cShapes = shapes.filter(s => s.carrier === carrierName);
+  if (!cShapes.length) return;
+  const allSelected = cShapes.every(s => focusedShapeIds.has(s.id));
+  if (allSelected) {
+    cShapes.forEach(s => focusedShapeIds.delete(s.id));
+  } else {
+    cShapes.forEach(s => focusedShapeIds.add(s.id));
+  }
+  if (focusedShapeIds.size === 0) { setShowAll(true); return; }
+
+  showAllMode = false;
+  shapes.forEach(s => {
+    if (s.layer.setStyle) s.layer.setStyle({ opacity: 0, fillOpacity: 0 });
+    (s.extraLayers || []).forEach(l => { if (l.setStyle) l.setStyle({ opacity: 0, fillOpacity: 0 }); });
+  });
+  conflictMarkerLayer.eachLayer(m => m.setStyle && m.setStyle({ opacity: 0, fillOpacity: 0 }));
+
+  focusDotLayer.clearLayers();
+  const zipLookup = new Map(zipData.map(z => [z[0], z]));
+  const unionZips = new Set();
+  focusedShapeIds.forEach(sid => {
+    const s = shapes.find(x => x.id === sid);
+    if (!s) return;
+    (shapeZips[sid] || []).forEach(zip => {
+      unionZips.add(zip);
+      const entry = zipLookup.get(zip);
+      if (!entry) return;
+      L.circleMarker([entry[1], entry[2]], {
+        radius: 3, color: s.color, fillColor: s.color, weight: 1, fillOpacity: 0.85, opacity: 1
+      }).bindTooltip(`${zip} — ${entry[3]}, ${entry[4]}`, { sticky: true }).addTo(focusDotLayer);
+    });
+  });
+
+  zipResult = Array.from(unionZips).sort();
+  renderZipList();
+  renderShapesBar();
+  renderConflictPanel();
+  const selectedCarriers = [...new Set(shapes.filter(s => focusedShapeIds.has(s.id)).map(s => s.carrier || s.label))];
+  setStatus(`Selected: ${selectedCarriers.join(', ')} · ${zipResult.length.toLocaleString()} ZIPs`, 'ok');
 }
 
 function setShowAll(val) {
@@ -834,26 +916,52 @@ document.getElementById('copyBtn').addEventListener('click', () => {
 });
 
 document.getElementById('csvBtn').addEventListener('click', () => {
-  // Export format matches the original import file (title row + header row + data)
-  const header = [['Start Postal Code','End Postal Code','Area/Route']];
-  const dataRows = [];
-  if (shapes.length > 0 && Object.keys(shapeZips).length > 0) {
-    shapes.forEach(s => {
-      const zips = (shapeZips[s.id] || []).slice().sort();
-      zips.forEach(z => dataRows.push([z, z, s.label]));
-    });
-  } else {
-    zipResult.forEach(z => dataRows.push([z, z, 'All Areas']));
-  }
-  const toLine = r => r.map(v => `"${v.toString().replace(/"/g,'""')}"`).join(',');
-  const csv = [toLine(header[0]), ...dataRows.map(toLine)].join('\n');
+  const toLine = r => r.map(v => `"${(v||'').toString().replace(/"/g,'""')}"`).join(',');
   const name = document.getElementById('projectNameInput').value.trim() || 'zip_codes';
+  const hasCarriers = shapes.some(s => s.carrier);
+  let csv, rowCount;
+
+  if (hasCarriers) {
+    // Service Area format — individual ZIP rows, minus mod fields
+    const zipLookup = new Map(zipData.map(z => [z[0], z]));
+    const svcHeader = ['Country','From Zip','To Zip','City','State','Carrier','From/To Point',
+      'Days In','Days Out','Carrier Alt1','From/To Point Alt1','Days In Alt1','Days Out Alt1',
+      'Carrier Alt2','From/To Point Alt2','Days In Alt2','Days Out Alt2',
+      'Carrier Alt3','From/To Point Alt3','Days In Alt3','Days Out Alt3',
+      'Carrier Alt4','From/To Point Alt4','Days In Alt4','Days Out Alt4'];
+    const dataRows = [];
+    shapes.forEach(s => {
+      (shapeZips[s.id] || []).slice().sort().forEach(z => {
+        const entry = zipLookup.get(z);
+        const city  = entry ? entry[3] : '';
+        const state = entry ? entry[4] : '';
+        dataRows.push(['US', z, z, city, state, s.carrier||'', s.label, '0','0',
+          '','','','','','','','','','','','','','','','']);
+      });
+    });
+    rowCount = dataRows.length;
+    csv = ['Service Area', toLine(svcHeader), ...dataRows.map(toLine)].join('\n');
+  } else {
+    // Area/Route format
+    const header = ['Start Postal Code','End Postal Code','Area/Route'];
+    const dataRows = [];
+    if (shapes.length > 0 && Object.keys(shapeZips).length > 0) {
+      shapes.forEach(s => {
+        (shapeZips[s.id] || []).slice().sort().forEach(z => dataRows.push([z, z, s.label]));
+      });
+    } else {
+      zipResult.forEach(z => dataRows.push([z, z, 'All Areas']));
+    }
+    rowCount = dataRows.length;
+    csv = [toLine(header), ...dataRows.map(toLine)].join('\n');
+  }
+
   const blob = new Blob([csv], { type: 'text/csv' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = name.replace(/[^a-z0-9_-]/gi,'_') + '_zips.csv';
+  a.download = name.replace(/[^a-z0-9_-]/gi,'_') + '_export.csv';
   a.click();
-  toast(`Exported ${rows.length - 1} rows across ${shapes.length} area${shapes.length>1?'s':''}`);
+  toast(`Exported ${rowCount.toLocaleString()} rows`);
 });
 
 // ── Clear ──────────────────────────────────────────────────────────────────
@@ -1410,106 +1518,121 @@ document.getElementById('importSvcFile').addEventListener('change', function() {
 
 function processServiceAreaCSV(text, filename) {
   // Format: row 1 = "Service Area" title, row 2 = headers
-  // Columns: Country, From Zip, To Zip, City, State, Carrier, From/To Point, ...
-  // Group by "From/To Point" (col index 6)
-  // Rows with no From Zip but a State → expand to all ZIPs in that state
+  // Columns: Country, From Zip, To Zip, City, State, Carrier, From/To Point, Days In, Days Out,
+  //          Carrier Alt1, From/To Point Alt1, ... (up to Alt4), Added By, Added On, Modified By, Modified On
+  // Supports: individual ZIPs, ZIP ranges, state-level rows, Alt carrier columns
   const lines = text.split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 3) { toast('⚠ CSV appears empty'); return; }
 
-  // Build lookups
-  const zipLookup  = new Map(zipData.map(z => [z[0], z]));
-  const stateLookup = new Map(); // state abbr → [zip, ...]
+  const zipLookup   = new Map(zipData.map(z => [z[0], z]));
+  const stateLookup = new Map();
   zipData.forEach(z => {
-    const st = z[4]; // state abbr
-    if (!stateLookup.has(st)) stateLookup.set(st, []);
-    stateLookup.get(st).push(z[0]);
+    if (!stateLookup.has(z[4])) stateLookup.set(z[4], []);
+    stateLookup.get(z[4]).push(z[0]);
   });
 
-  const groups = {}; // terminal name → Set of ZIPs
+  // carrierGroups: carrier → { terminals: termName → Set<zip>, terminalOrder: [] }
+  const carrierGroups = {};
+  const carrierOrder  = [];
+
+  function addToGroup(carrier, terminal, zips) {
+    if (!carrier || !terminal || !zips.length) return;
+    if (!carrierGroups[carrier]) { carrierGroups[carrier] = { terminals: {}, terminalOrder: [] }; carrierOrder.push(carrier); }
+    if (!carrierGroups[carrier].terminals[terminal]) { carrierGroups[carrier].terminals[terminal] = new Set(); carrierGroups[carrier].terminalOrder.push(terminal); }
+    zips.forEach(z => carrierGroups[carrier].terminals[terminal].add(z));
+  }
+
+  function expandZips(fromZip, toZip, state) {
+    if (fromZip && fromZip.length >= 4) {
+      const fz = fromZip.padStart(5, '0');
+      const tz = (toZip || fromZip).padStart(5, '0');
+      if (fz === tz) return zipLookup.has(fz) ? [fz] : [];
+      // ZIP range — return all centroids in [fz, tz]
+      return zipData.filter(z => z[0] >= fz && z[0] <= tz).map(z => z[0]);
+    }
+    if (state && state.length === 2) return stateLookup.get(state) || [];
+    return [];
+  }
+
+  // Alt carrier column pairs: [carrierColIdx, terminalColIdx]
+  const altCols = [[9,10],[13,14],[17,18],[21,22]];
 
   for (let i = 2; i < lines.length; i++) {
     const cols = parseCSVLine(lines[i]);
     if (cols.length < 7) continue;
     const fromZip  = cols[1].trim();
+    const toZip    = cols[2].trim();
     const state    = cols[4].trim();
+    const carrier  = cols[5].trim();
     const terminal = cols[6].trim();
-    if (!terminal) continue;
-
-    if (!groups[terminal]) groups[terminal] = new Set();
-
-    if (fromZip && fromZip.length >= 5) {
-      // Specific ZIP row
-      groups[terminal].add(fromZip);
-    } else if (state && state.length === 2) {
-      // State-level row — expand to all ZIPs for that state
-      const stateZips = stateLookup.get(state) || [];
-      stateZips.forEach(z => groups[terminal].add(z));
+    const zips = expandZips(fromZip, toZip, state);
+    if (!zips.length) continue;
+    addToGroup(carrier, terminal, zips);
+    // Alt carriers get the same ZIPs
+    for (const [ci, ti] of altCols) {
+      const ac = cols[ci] ? cols[ci].trim() : '';
+      const at = cols[ti] ? cols[ti].trim() : '';
+      if (ac && at) addToGroup(ac, at, zips);
     }
   }
 
-  const terminalNames = Object.keys(groups);
-  if (!terminalNames.length) { toast('⚠ No terminals found in CSV'); return; }
+  const carrierNames = carrierOrder.filter(c => carrierGroups[c]);
+  if (!carrierNames.length) { toast('⚠ No carriers found in CSV'); return; }
 
-  if (shapes.length > 0 && !confirm(`Clear the ${shapes.length} area(s) on the map and import ${terminalNames.length} service areas from "${filename}"?`)) return;
+  if (shapes.length > 0 && !confirm(`Clear the ${shapes.length} area(s) on the map and import from "${filename}"?`)) return;
 
-  // Clear map
   drawnItems.clearLayers();
   shapes = [];
   shapeZips = {};
   zipResult = [];
 
   let imported = 0;
+  let colorIdx = 0;
   const allFound = new Set();
 
-  for (let i = 0; i < terminalNames.length; i++) {
-    const termName = terminalNames[i];
-    const termZips = [...groups[termName]];
+  for (const carrierName of carrierNames) {
+    const color = SHAPE_COLORS[colorIdx % SHAPE_COLORS.length];
+    colorIdx++;
+    const { terminals, terminalOrder } = carrierGroups[carrierName];
 
-    const points = [];
-    const foundZips = [];
-    for (const zip of termZips) {
-      const entry = zipLookup.get(zip);
-      if (entry) {
-        points.push(turf.point([entry[2], entry[1]]));
-        foundZips.push(zip);
-        allFound.add(zip);
-      }
+    for (const termName of terminalOrder) {
+      const termZips = [...terminals[termName]].filter(z => zipLookup.has(z));
+      if (!termZips.length) continue;
+      termZips.forEach(z => allFound.add(z));
+
+      const points = termZips.map(z => { const e = zipLookup.get(z); return turf.point([e[2], e[1]]); });
+      const clusters = clusterByDistance(points, 500);
+      const id = Date.now() + imported;
+      let mainLayer = null;
+      const extraLayers = [];
+
+      clusters.forEach(clusterPts => {
+        if (!clusterPts.length) return;
+        try {
+          let l;
+          const hull = clusterPts.length >= 3 ? turf.convex(turf.featureCollection(clusterPts)) : null;
+          if (hull) {
+            const coords = hull.geometry.coordinates[0].map(([lng, lat]) => [lat, lng]);
+            l = L.polygon(coords, { color, fillColor: color, weight: 2, fillOpacity: 0.12 });
+          } else if (clusterPts.length === 2) {
+            const coords = clusterPts.map(p => [p.geometry.coordinates[1], p.geometry.coordinates[0]]);
+            l = L.polyline(coords, { color, weight: 3, opacity: 0.7 });
+          } else {
+            const [lng, lat] = clusterPts[0].geometry.coordinates;
+            l = L.circleMarker([lat, lng], { color, fillColor: color, radius: 10, weight: 2, fillOpacity: 0.4 });
+          }
+          drawnItems.addLayer(l);
+          addLabelToLayer(l, termName);
+          if (!mainLayer) { l._shapeId = id; mainLayer = l; }
+          else { extraLayers.push(l); }
+        } catch(e) {}
+      });
+
+      if (!mainLayer) continue;
+      shapes.push({ id, layer: mainLayer, extraLayers, color, label: termName, carrier: carrierName, imported: true });
+      shapeZips[id] = termZips.sort();
+      imported++;
     }
-
-    if (points.length < 1) continue;
-
-    const clusters = clusterByDistance(points, 500);
-    const color = SHAPE_COLORS[i % SHAPE_COLORS.length];
-    const id = Date.now() + i;
-    let mainLayer = null;
-    const extraLayers = [];
-
-    clusters.forEach(clusterPts => {
-      if (clusterPts.length < 1) return;
-      try {
-        let l;
-        const hull = clusterPts.length >= 3 ? turf.convex(turf.featureCollection(clusterPts)) : null;
-        if (hull) {
-          const coords = hull.geometry.coordinates[0].map(([lng, lat]) => [lat, lng]);
-          l = L.polygon(coords, { color, fillColor: color, weight: 2, fillOpacity: 0.12 });
-        } else if (clusterPts.length === 2) {
-          const coords = clusterPts.map(p => [p.geometry.coordinates[1], p.geometry.coordinates[0]]);
-          l = L.polyline(coords, { color, weight: 3, opacity: 0.7 });
-        } else {
-          const [lng, lat] = clusterPts[0].geometry.coordinates;
-          l = L.circleMarker([lat, lng], { color, fillColor: color, radius: 10, weight: 2, fillOpacity: 0.4 });
-        }
-        drawnItems.addLayer(l);
-        addLabelToLayer(l, termName);
-        if (!mainLayer) { l._shapeId = id; mainLayer = l; }
-        else { extraLayers.push(l); }
-      } catch(e) {}
-    });
-
-    if (!mainLayer) continue;
-    shapes.push({ id, layer: mainLayer, extraLayers, color, label: termName, imported: true });
-    shapeZips[id] = foundZips.sort();
-    imported++;
   }
 
   zipResult = Array.from(allFound).sort();
@@ -1524,8 +1647,8 @@ function processServiceAreaCSV(text, filename) {
 
   const pName = filename.replace(/\.[^.]+$/, '');
   document.getElementById('projectNameInput').value = pName;
-  toast(`✓ Imported ${imported} terminals · ${zipResult.length.toLocaleString()} total ZIPs`);
-  setStatus(`✓ Imported ${imported} service area terminals from CSV · ${zipResult.length.toLocaleString()} ZIPs`, 'ok');
+  toast(`✓ Imported ${carrierNames.length} carrier${carrierNames.length>1?'s':''} · ${imported} terminals · ${zipResult.length.toLocaleString()} ZIPs`);
+  setStatus(`✓ Imported from "${filename}" · ${imported} terminals across ${carrierNames.length} carriers`, 'ok');
 }
 
 function parseCSVLine(line) {
