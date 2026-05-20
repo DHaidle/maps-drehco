@@ -116,21 +116,21 @@ body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:colum
 .name-modal .btn-cancel:hover{background:#ddd}
 
 /* ── Conflicts panel ── */
-.conflict-section{border-bottom:2px solid #fdebd8;flex-shrink:0;background:#fffbf7}
+.conflict-section{border-bottom:2px solid #fde8e8;flex-shrink:0;background:#fff9f9}
 .conflict-toggle{padding:8px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;
   user-select:none}
-.conflict-toggle:hover{background:#fef3e8}
-.conflict-badge{background:var(--orange);color:#fff;border-radius:10px;padding:2px 9px;
+.conflict-toggle:hover{background:#fef0f0}
+.conflict-badge{background:var(--red);color:#fff;border-radius:10px;padding:2px 9px;
   font-size:.72rem;font-weight:700;flex-shrink:0}
-.conflict-toggle-label{font-size:.8rem;font-weight:700;color:var(--orange);flex:1}
+.conflict-toggle-label{font-size:.8rem;font-weight:700;color:var(--red);flex:1}
 .conflict-caret{font-size:.7rem;color:#aaa;transition:transform .2s}
 .conflict-caret.open{transform:rotate(90deg)}
 .conflict-list-wrap{max-height:180px;overflow-y:auto;display:none}
 .conflict-list-wrap.open{display:block}
-.conflict-item{padding:5px 14px;border-top:1px solid #fdebd8;font-size:.77rem;cursor:pointer;
+.conflict-item{padding:5px 14px;border-top:1px solid #fde8e8;font-size:.77rem;cursor:pointer;
   display:flex;align-items:baseline;gap:8px}
-.conflict-item:hover{background:#fef3e8}
-.conflict-zip{font-family:monospace;font-weight:700;color:var(--orange);flex-shrink:0}
+.conflict-item:hover{background:#fef0f0}
+.conflict-zip{font-family:monospace;font-weight:700;color:var(--red);flex-shrink:0}
 .conflict-areas-txt{color:#666;font-size:.72rem}
 .conflict-empty{padding:8px 14px;font-size:.78rem;color:#4CAF50;font-weight:700}
 
@@ -237,7 +237,7 @@ body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:colum
       <div class="conflict-section" id="conflictSection" style="display:none">
         <div class="conflict-toggle" id="conflictToggle">
           <span class="conflict-badge" id="conflictBadge">0</span>
-          <span class="conflict-toggle-label">Shared ZIPs (in multiple areas)</span>
+          <span class="conflict-toggle-label">ZIP Conflicts</span>
           <span class="conflict-caret" id="conflictCaret">▶</span>
         </div>
         <div class="conflict-list-wrap" id="conflictListWrap"></div>
@@ -941,7 +941,7 @@ function renderConflictMarkers() {
     if (!entry) continue;
     const marker = L.circleMarker([entry[1], entry[2]], {
       radius: 7, color: '#fff', weight: 2,
-      fillColor: '#ED7D31', fillOpacity: 0.9
+      fillColor: '#C00000', fillOpacity: 0.9
     });
     marker.bindTooltip(zip, { direction: 'top', offset: [0, -6] });
     marker.on('contextmenu', function(e) {
