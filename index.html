@@ -70,6 +70,9 @@ body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:colum
 .show-all-btn{font-size:.68rem;padding:2px 8px;border-radius:8px;border:1.5px solid #2E75B6;
   color:#2E75B6;background:#fff;cursor:pointer;font-weight:700;transition:all .15s;white-space:nowrap}
 .show-all-btn.active{background:#2E75B6;color:#fff}
+.sort-select{font-size:.68rem;padding:2px 6px;border-radius:8px;border:1.5px solid #ccd4e0;
+  color:#555;background:#fff;cursor:pointer;font-family:Arial;outline:none}
+.sort-select:focus{border-color:#2E75B6}
 .show-all-btn:hover{background:#2E75B6;color:#fff}
 .shape-chip{padding:3px 9px;border-radius:10px;font-size:.72rem;font-weight:700;cursor:pointer;
   color:#fff;display:inline-flex;align-items:center;gap:4px;transition:all .15s}
@@ -331,6 +334,7 @@ let shapes    = [];   // [{id, layer, color, label}]
 let shapeZips = {};   // {shapeId: [zip, ...]} — per-area ZIP lists for export
 let zipResult = [];   // current computed ZIP union (no duplicates)
 let activeTab = 'zips';
+let shapeSort = 'alpha'; // 'alpha' | 'geo'
 let currentProjectId = null;
 let pendingNameCb = null;
 let showAllMode   = true;
@@ -581,11 +585,38 @@ function renderZipList() {
   ).join('');
 }
 
+// Returns a geographic center {lat, lng} for a shape based on its ZIPs
+function shapeCenter(s) {
+  const zipLookup = new Map(zipData.map(z => [z[0], z]));
+  const zips = shapeZips[s.id] || [];
+  let latSum = 0, lngSum = 0, n = 0;
+  zips.forEach(z => {
+    const entry = zipLookup.get(z);
+    if (entry) { latSum += entry[1]; lngSum += entry[2]; n++; }
+  });
+  if (!n) return { lat: 0, lng: 0 };
+  return { lat: latSum / n, lng: lngSum / n };
+}
+
+function sortedShapes() {
+  const list = shapes.slice();
+  if (shapeSort === 'alpha') {
+    list.sort((a, b) => a.label.localeCompare(b.label));
+  } else {
+    // NE → SW: higher (lat + lng) = more northeast in the US (lng is negative, so less negative = more east)
+    list.sort((a, b) => {
+      const ca = shapeCenter(a), cb = shapeCenter(b);
+      return (cb.lat + cb.lng) - (ca.lat + ca.lng);
+    });
+  }
+  return list;
+}
+
 function renderShapesBar() {
   const bar = document.getElementById('shapesBar');
   if (!shapes.length) { bar.style.display = 'none'; return; }
   bar.style.display = 'flex';
-  const chips = shapes.map(s => {
+  const chips = sortedShapes().map(s => {
     const count = (shapeZips[s.id] || []).length;
     const countBadge = count ? ` (${count})` : '';
     const isFocused = !showAllMode && focusedShapeId === s.id;
@@ -599,7 +630,13 @@ function renderShapesBar() {
   bar.innerHTML = `
     <div class="shapes-bar-header">
       <span class="shapes-bar-label">Areas on map</span>
-      <button class="show-all-btn ${showAllActive}" onclick="setShowAll(true)">👁 Show All</button>
+      <div style="display:flex;gap:6px;align-items:center">
+        <select class="sort-select" onchange="shapeSort=this.value;renderShapesBar()" title="Sort areas">
+          <option value="alpha" ${shapeSort==='alpha'?'selected':''}>A–Z</option>
+          <option value="geo"   ${shapeSort==='geo'  ?'selected':''}>NE → SW</option>
+        </select>
+        <button class="show-all-btn ${showAllActive}" onclick="setShowAll(true)">👁 Show All</button>
+      </div>
     </div>
     ${chips}`;
 }
