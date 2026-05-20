@@ -1225,12 +1225,23 @@ function processImportedCSV(text, filename) {
     const extraLayers = [];
 
     clusters.forEach((clusterPts, ci) => {
-      if (clusterPts.length < 2) return;
+      if (clusterPts.length < 1) return;
       try {
-        const hull = turf.convex(turf.featureCollection(clusterPts));
-        if (!hull) return;
-        const coords = hull.geometry.coordinates[0].map(([lng, lat]) => [lat, lng]);
-        const l = L.polygon(coords, { color, fillColor: color, weight: 2, fillOpacity: 0.12 });
+        let l;
+        const hull = clusterPts.length >= 3 ? turf.convex(turf.featureCollection(clusterPts)) : null;
+        if (hull) {
+          // Normal polygon hull
+          const coords = hull.geometry.coordinates[0].map(([lng, lat]) => [lat, lng]);
+          l = L.polygon(coords, { color, fillColor: color, weight: 2, fillOpacity: 0.12 });
+        } else if (clusterPts.length === 2) {
+          // Two points — draw a thin line between them
+          const coords = clusterPts.map(p => [p.geometry.coordinates[1], p.geometry.coordinates[0]]);
+          l = L.polyline(coords, { color, weight: 3, opacity: 0.7 });
+        } else {
+          // Single point — draw a small circle marker
+          const [lng, lat] = clusterPts[0].geometry.coordinates;
+          l = L.circleMarker([lat, lng], { color, fillColor: color, radius: 10, weight: 2, fillOpacity: 0.4 });
+        }
         drawnItems.addLayer(l);
         addLabelToLayer(l, areaName);
         if (!mainLayer) { l._shapeId = id; mainLayer = l; }
