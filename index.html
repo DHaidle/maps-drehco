@@ -365,10 +365,15 @@ function hslToHex(h, s, l) {
 function generateShades(baseHex, n) {
   if (n <= 1) return [baseHex];
   const [h, s, l] = hexToHsl(baseHex);
-  // Wide spread: darkest → lightest, maximizing visual separation between terminals
-  const minL = Math.max(14, l - 30);
-  const maxL = Math.min(80, l + 34);
-  return Array.from({length: n}, (_, i) => hslToHex(h, s, minL + (maxL - minL) * i / (n - 1)));
+  // Wide spread: darkest+vivid → lightest+pastel for maximum terminal separation
+  const minL = Math.max(12, l - 32);
+  const maxL = Math.min(82, Math.max(minL + 50, l + 38)); // enforce at least 50 units of spread
+  return Array.from({length: n}, (_, i) => {
+    const t = i / (n - 1);
+    const li = minL + (maxL - minL) * t;
+    const si = Math.min(100, s + (1 - t) * 18); // darker = more saturated, lighter = more pastel
+    return hslToHex(h, si, li);
+  });
 }
 
 // ── State ──────────────────────────────────────────────────────────────────
