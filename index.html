@@ -125,6 +125,13 @@ body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:colum
 .zip-edit-modal textarea:focus{border-color:var(--blue)}
 .zip-edit-hint{font-size:.72rem;color:#888;margin-top:6px;margin-bottom:12px}
 
+/* ── Map area labels ── */
+.area-label{background:none!important;border:none!important;box-shadow:none!important;
+  font-weight:700;font-size:.78rem;color:#fff;
+  text-shadow:0 1px 3px rgba(0,0,0,.85),0 0 8px rgba(0,0,0,.6);
+  white-space:nowrap;pointer-events:none;padding:0!important}
+.area-label::before{display:none!important}
+
 /* ── Shape chip edit icon ── */
 .shape-chip-edit{opacity:.7;font-size:.8em;margin-left:3px;cursor:pointer}
 .shape-chip-edit:hover{opacity:1}
@@ -381,6 +388,7 @@ mapEl.addEventListener('mouseup', (e) => {
   layer._shapeId = id;
   const defaultName = 'Area ' + (shapes.length + 1);
   shapes.push({ id, layer, color, label: defaultName });
+  addLabelToLayer(layer, defaultName);
   computeZips();
   document.getElementById('saveBtn').disabled = false;
 
@@ -391,7 +399,7 @@ mapEl.addEventListener('mouseup', (e) => {
 
   promptAreaName('Name this area', defaultName, (name) => {
     const s = shapes.find(x => x.id === id);
-    if (s && name) s.label = name;
+    if (s && name) { s.label = name; addLabelToLayer(layer, name); }
     renderShapesBar();
   });
 });
@@ -469,13 +477,14 @@ map.on(L.Draw.Event.CREATED, function(e) {
   layer._shapeId = id;
   const defaultName = 'Area ' + (shapes.length + 1);
   shapes.push({ id, layer, color, label: defaultName });
+  addLabelToLayer(layer, defaultName);
   computeZips();
   document.getElementById('saveBtn').disabled = false;
 
   // Prompt user to name the area
   promptAreaName('Name this area', defaultName, (name) => {
     const s = shapes.find(x => x.id === id);
-    if (s && name) s.label = name;
+    if (s && name) { s.label = name; addLabelToLayer(layer, name); }
     renderShapesBar();
   });
 });
@@ -530,11 +539,23 @@ function renderShapesBar() {
   bar.innerHTML = `<span class="shapes-bar-label">Areas on map</span>${chips}`;
 }
 
+function addLabelToLayer(layer, label) {
+  if (layer.getTooltip) layer.unbindTooltip();
+  layer.bindTooltip(label, {
+    permanent: true, direction: 'center',
+    className: 'area-label', interactive: false
+  });
+}
+
 function renameShape(id) {
   const s = shapes.find(x => x.id === id);
   if (!s) return;
   promptAreaName('Rename area', s.label, (name) => {
-    if (name) { s.label = name; renderShapesBar(); }
+    if (name) {
+      s.label = name;
+      addLabelToLayer(s.layer, name);
+      renderShapesBar();
+    }
   });
 }
 
@@ -738,7 +759,9 @@ async function openProject(id, e) {
         drawnItems.addLayer(layer);
         const sid = Date.now() + i;
         layer._shapeId = sid;
-        shapes.push({ id: sid, layer, color, label: s.label || 'Shape ' + (i+1) });
+        const lbl = s.label || 'Area ' + (i+1);
+        shapes.push({ id: sid, layer, color, label: lbl });
+        addLabelToLayer(layer, lbl);
       } catch(e) { console.warn('Shape restore error', e); }
     });
 
@@ -928,6 +951,7 @@ function processImportedCSV(text, filename) {
     layer._shapeId = id;
     const color = SHAPE_COLORS[i % SHAPE_COLORS.length];
     shapes.push({ id, layer, color, label: areaName, imported: true });
+    addLabelToLayer(layer, areaName);
     shapeZips[id] = foundZips.sort();
     imported++;
   }
