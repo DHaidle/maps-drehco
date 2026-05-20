@@ -659,28 +659,36 @@ function focusArea(id) {
   }
   focusedShapeId = id;
 
-  // Show/hide layers (including extra cluster layers)
+  // Hide all hulls
   shapes.forEach(s => {
-    const visible = s.id === id;
-    const style = visible ? { opacity: 1, fillOpacity: 0.2 } : { opacity: 0, fillOpacity: 0 };
-    if (s.layer.setStyle) s.layer.setStyle(style);
-    (s.extraLayers || []).forEach(l => { if (l.setStyle) l.setStyle(style); });
+    if (s.layer.setStyle) s.layer.setStyle({ opacity: 0, fillOpacity: 0 });
+    (s.extraLayers || []).forEach(l => { if (l.setStyle) l.setStyle({ opacity: 0, fillOpacity: 0 }); });
   });
 
   // Hide conflict markers in focus mode
   conflictMarkerLayer.eachLayer(m => m.setStyle && m.setStyle({ opacity: 0, fillOpacity: 0 }));
 
-  // Show only focused area's ZIPs in panel
+  // Draw ZIP dots for focused area
   const s = shapes.find(x => x.id === id);
+  focusDotLayer.clearLayers();
   if (s) {
-    const zips = (shapeZips[id] || []);
+    const zipLookup = new Map(zipData.map(z => [z[0], z]));
+    const zips = shapeZips[id] || [];
+    zips.forEach(zip => {
+      const entry = zipLookup.get(zip);
+      if (!entry) return;
+      L.circleMarker([entry[1], entry[2]], {
+        radius: 3,
+        color: s.color,
+        fillColor: s.color,
+        weight: 1,
+        fillOpacity: 0.85,
+        opacity: 1
+      }).bindTooltip(`${zip} — ${entry[3]}, ${entry[4]}`, { sticky: true }).addTo(focusDotLayer);
+    });
+
     zipResult = zips.slice().sort();
     renderZipList();
-    // Zoom to this area (fit all cluster layers)
-    try {
-      const allLayers = [s.layer, ...(s.extraLayers || [])];
-      map.fitBounds(L.featureGroup(allLayers).getBounds(), { padding: [40, 40] });
-    } catch(e) {}
   }
 
   renderShapesBar();
@@ -692,7 +700,8 @@ function setShowAll(val) {
   showAllMode = val;
   focusedShapeId = null;
 
-  // Restore all layers (including extra cluster layers)
+  // Clear focus dots, restore all hulls
+  focusDotLayer.clearLayers();
   shapes.forEach(s => {
     if (s.layer.setStyle) s.layer.setStyle({ opacity: 1, fillOpacity: 0.15 });
     (s.extraLayers || []).forEach(l => { if (l.setStyle) l.setStyle({ opacity: 1, fillOpacity: 0.15 }); });
@@ -1020,6 +1029,9 @@ function formatDate(iso) {
   try { return new Date(iso).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }); }
   catch(e) { return iso.slice(0,10); }
 }
+
+// ── Focus ZIP dot layer ───────────────────────────────────────────────────
+const focusDotLayer = L.layerGroup().addTo(map);
 
 // ── Conflict detection & display ─────────────────────────────────────────
 const conflictMarkerLayer = L.layerGroup().addTo(map);
