@@ -115,6 +115,36 @@ body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:colum
 .name-modal .btn-cancel{background:#eee;color:#444;border:1.5px solid #ccc}
 .name-modal .btn-cancel:hover{background:#ddd}
 
+/* ── Conflicts panel ── */
+.conflict-section{border-bottom:2px solid #fde8e8;flex-shrink:0;background:#fff9f9}
+.conflict-toggle{padding:8px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;
+  user-select:none}
+.conflict-toggle:hover{background:#fef0f0}
+.conflict-badge{background:var(--red);color:#fff;border-radius:10px;padding:2px 9px;
+  font-size:.72rem;font-weight:700;flex-shrink:0}
+.conflict-toggle-label{font-size:.8rem;font-weight:700;color:var(--red);flex:1}
+.conflict-caret{font-size:.7rem;color:#aaa;transition:transform .2s}
+.conflict-caret.open{transform:rotate(90deg)}
+.conflict-list-wrap{max-height:180px;overflow-y:auto;display:none}
+.conflict-list-wrap.open{display:block}
+.conflict-item{padding:5px 14px;border-top:1px solid #fde8e8;font-size:.77rem;cursor:pointer;
+  display:flex;align-items:baseline;gap:8px}
+.conflict-item:hover{background:#fef0f0}
+.conflict-zip{font-family:monospace;font-weight:700;color:var(--red);flex-shrink:0}
+.conflict-areas-txt{color:#666;font-size:.72rem}
+.conflict-empty{padding:8px 14px;font-size:.78rem;color:#4CAF50;font-weight:700}
+
+/* ── Right-click context menu ── */
+.ctx-menu{position:fixed;background:#fff;border:1.5px solid #dde4ee;border-radius:8px;
+  padding:4px 0;z-index:99999;box-shadow:0 4px 20px rgba(0,0,0,.2);min-width:200px;display:none}
+.ctx-menu.open{display:block}
+.ctx-title{padding:6px 14px;font-size:.72rem;color:#888;font-weight:700;
+  border-bottom:1px solid #eee;letter-spacing:.3px}
+.ctx-item{padding:8px 14px;font-size:.82rem;cursor:pointer;display:flex;align-items:center;gap:8px}
+.ctx-item:hover{background:#eef4fb;color:var(--blue)}
+.ctx-item.leave{color:#aaa;border-top:1px solid #eee;font-style:italic}
+.ctx-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+
 /* ── ZIP edit modal ── */
 .zip-edit-modal{min-width:380px;max-width:480px}
 .zip-edit-modal h3{margin-bottom:4px}
@@ -203,6 +233,16 @@ body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:colum
           <button class="btn btn-blue btn-sm" id="csvBtn" disabled>⬇ Export CSV</button>
         </div>
       </div>
+      <!-- Conflicts section -->
+      <div class="conflict-section" id="conflictSection" style="display:none">
+        <div class="conflict-toggle" id="conflictToggle">
+          <span class="conflict-badge" id="conflictBadge">0</span>
+          <span class="conflict-toggle-label">ZIP Conflicts</span>
+          <span class="conflict-caret" id="conflictCaret">▶</span>
+        </div>
+        <div class="conflict-list-wrap" id="conflictListWrap"></div>
+      </div>
+
       <div class="zip-list-wrap" id="zipListWrap">
         <div class="zip-placeholder">
           <span class="icon">✏️</span>
@@ -238,6 +278,12 @@ body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:colum
 
 <!-- Toast -->
 <div class="toast hidden" id="toast"></div>
+
+<!-- Right-click context menu -->
+<div class="ctx-menu" id="ctxMenu">
+  <div class="ctx-title" id="ctxTitle">Assign ZIP to:</div>
+  <div id="ctxItems"></div>
+</div>
 
 <!-- Area name modal -->
 <div class="name-modal-bg" id="nameModalBg">
@@ -449,6 +495,7 @@ function computeZips() {
 
   zipResult = Array.from(found).sort();
   renderZipList();
+  computeAndRenderConflicts();
   setStatus(`✓ ${zipResult.length} ZIPs across ${shapes.length} area${shapes.length>1?'s':''}`, 'ok');
 }
 
@@ -586,6 +633,7 @@ document.getElementById('zipEditSave').addEventListener('click', () => {
   zipResult = Array.from(allFound).sort();
 
   document.getElementById('zipEditModalBg').classList.remove('open');
+  computeAndRenderConflicts();
   renderShapesBar();
   renderZipList();
   const s = shapes.find(x => x.id === id);
@@ -624,18 +672,15 @@ document.getElementById('copyBtn').addEventListener('click', () => {
 });
 
 document.getElementById('csvBtn').addEventListener('click', () => {
-  const zipInfo = {};
-  for (const [zip,,, city, state] of zipData) zipInfo[zip] = { city, state };
-  const rows = [['Area Name','ZIP Code','City','State']];
+  // Export format: "Start Postal Code","End Postal Code","Area/Route"
+  const rows = [['Start Postal Code','End Postal Code','Area/Route']];
   if (shapes.length > 0 && Object.keys(shapeZips).length > 0) {
-    // Export per-area (each ZIP tagged with its area name)
     shapes.forEach(s => {
       const zips = (shapeZips[s.id] || []).slice().sort();
-      zips.forEach(z => rows.push([s.label, z, zipInfo[z]?.city||'', zipInfo[z]?.state||'']));
+      zips.forEach(z => rows.push([z, z, s.label]));
     });
   } else {
-    // Fallback: union list
-    zipResult.forEach(z => rows.push(['All Areas', z, zipInfo[z]?.city||'', zipInfo[z]?.state||'']));
+    zipResult.forEach(z => rows.push([z, z, 'All Areas']));
   }
   const csv = rows.map(r => r.map(v => `"${v.toString().replace(/"/g,'""')}"`).join(',')).join('\n');
   const name = document.getElementById('projectNameInput').value.trim() || 'zip_codes';
@@ -844,6 +889,146 @@ function formatDate(iso) {
   catch(e) { return iso.slice(0,10); }
 }
 
+// ── Conflict detection & display ─────────────────────────────────────────
+const conflictMarkerLayer = L.layerGroup().addTo(map);
+let conflictData = {}; // { zip: [shapeId, shapeId, ...] }
+
+function computeAndRenderConflicts() {
+  conflictData = {};
+  // Find ZIPs in more than one area
+  const zipToShapes = {};
+  for (const [sid, zips] of Object.entries(shapeZips)) {
+    for (const z of zips) {
+      if (!zipToShapes[z]) zipToShapes[z] = [];
+      zipToShapes[z].push(parseInt(sid));
+    }
+  }
+  for (const [z, sids] of Object.entries(zipToShapes)) {
+    if (sids.length > 1) conflictData[z] = sids;
+  }
+  renderConflictPanel();
+  renderConflictMarkers();
+}
+
+function renderConflictPanel() {
+  const section = document.getElementById('conflictSection');
+  const badge   = document.getElementById('conflictBadge');
+  const listWrap = document.getElementById('conflictListWrap');
+  const count = Object.keys(conflictData).length;
+
+  if (!count) { section.style.display = 'none'; return; }
+  section.style.display = 'block';
+  badge.textContent = count;
+
+  const items = Object.entries(conflictData).sort((a,b) => a[0].localeCompare(b[0])).map(([zip, sids]) => {
+    const areaNames = sids.map(sid => {
+      const s = shapes.find(x => x.id === sid);
+      return s ? s.label : '?';
+    }).join(' · ');
+    return `<div class="conflict-item" onclick="zoomToConflict('${zip}')" data-zip="${zip}">
+      <span class="conflict-zip">${zip}</span>
+      <span class="conflict-areas-txt">${esc(areaNames)}</span>
+    </div>`;
+  }).join('');
+  listWrap.innerHTML = items;
+}
+
+function renderConflictMarkers() {
+  conflictMarkerLayer.clearLayers();
+  const zipLookup = new Map(zipData.map(z => [z[0], z]));
+  for (const [zip, sids] of Object.entries(conflictData)) {
+    const entry = zipLookup.get(zip);
+    if (!entry) continue;
+    const marker = L.circleMarker([entry[1], entry[2]], {
+      radius: 7, color: '#fff', weight: 2,
+      fillColor: '#C00000', fillOpacity: 0.9
+    });
+    marker.bindTooltip(zip, { direction: 'top', offset: [0, -6] });
+    marker.on('contextmenu', function(e) {
+      L.DomEvent.stop(e);
+      showConflictMenu(e.originalEvent, zip, sids);
+    });
+    // Also allow left-click on mobile / non-right-click environments
+    marker.on('click', function(e) {
+      L.DomEvent.stop(e);
+      showConflictMenu(e.originalEvent, zip, sids);
+    });
+    conflictMarkerLayer.addLayer(marker);
+  }
+}
+
+function zoomToConflict(zip) {
+  const zipLookup = new Map(zipData.map(z => [z[0], z]));
+  const entry = zipLookup.get(zip);
+  if (!entry) return;
+  map.setView([entry[1], entry[2]], 10);
+}
+
+// Toggle conflict panel open/closed
+document.getElementById('conflictToggle').addEventListener('click', () => {
+  const wrap  = document.getElementById('conflictListWrap');
+  const caret = document.getElementById('conflictCaret');
+  wrap.classList.toggle('open');
+  caret.classList.toggle('open');
+});
+
+// ── Context menu ────────────────────────────────────────────────────────────
+function showConflictMenu(e, zip, sids) {
+  const menu  = document.getElementById('ctxMenu');
+  const title = document.getElementById('ctxTitle');
+  const items = document.getElementById('ctxItems');
+
+  title.textContent = `ZIP ${zip} is in ${sids.length} areas:`;
+
+  const areaItems = sids.map(sid => {
+    const s = shapes.find(x => x.id === sid);
+    if (!s) return '';
+    return `<div class="ctx-item" onclick="resolveConflict('${zip}',${sid})">
+      <span class="ctx-dot" style="background:${s.color}"></span>
+      Assign to ${esc(s.label)}
+    </div>`;
+  }).join('');
+
+  items.innerHTML = areaItems +
+    `<div class="ctx-item leave" onclick="hideCtxMenu()">Leave as-is</div>`;
+
+  // Position near click
+  const x = Math.min(e.clientX, window.innerWidth  - 220);
+  const y = Math.min(e.clientY, window.innerHeight - 160);
+  menu.style.left = x + 'px';
+  menu.style.top  = y + 'px';
+  menu.classList.add('open');
+}
+
+function hideCtxMenu() {
+  document.getElementById('ctxMenu').classList.remove('open');
+}
+
+function resolveConflict(zip, keepShapeId) {
+  hideCtxMenu();
+  // Remove ZIP from all OTHER shapes
+  for (const sid of Object.keys(shapeZips)) {
+    if (parseInt(sid) !== keepShapeId) {
+      shapeZips[sid] = shapeZips[sid].filter(z => z !== zip);
+    }
+  }
+  // Rebuild union
+  const found = new Set();
+  for (const zips of Object.values(shapeZips)) zips.forEach(z => found.add(z));
+  zipResult = Array.from(found).sort();
+
+  computeAndRenderConflicts();
+  renderShapesBar();
+  renderZipList();
+  const s = shapes.find(x => x.id === keepShapeId);
+  toast(`✓ ${zip} assigned to ${s ? s.label : 'area'}`);
+}
+
+// Hide context menu on outside click
+document.addEventListener('click', (e) => {
+  if (!document.getElementById('ctxMenu').contains(e.target)) hideCtxMenu();
+});
+
 // ── CSV Import ────────────────────────────────────────────────────────────
 document.getElementById('importBtn').addEventListener('click', () => {
   document.getElementById('importFile').value = '';
@@ -960,6 +1145,7 @@ function processImportedCSV(text, filename) {
   document.getElementById('saveBtn').disabled = !shapes.length;
   renderShapesBar();
   renderZipList();
+  computeAndRenderConflicts();
 
   if (drawnItems.getLayers().length) {
     try { map.fitBounds(drawnItems.getBounds(), { padding: [30, 30] }); } catch(e) {}
