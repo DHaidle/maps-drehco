@@ -217,8 +217,10 @@ body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:colum
     <label>Project:</label>
     <input id="projectNameInput" type="text" placeholder="Untitled project" maxlength="80"/>
     <button class="btn btn-orange" id="saveBtn" disabled>💾 Save Project</button>
-    <button class="btn btn-ghost btn-sm" id="importBtn">📂 Import CSV</button>
+    <button class="btn btn-ghost btn-sm" id="importBtn">📂 Area/Route Import</button>
     <input type="file" id="importFile" accept=".csv,.CSV" style="display:none"/>
+    <button class="btn btn-ghost btn-sm" id="importSvcBtn">📂 Service Area Import</button>
+    <input type="file" id="importSvcFile" accept=".csv,.CSV" style="display:none"/>
     <button class="btn btn-ghost btn-sm" id="clearBtn">🗑 Clear</button>
   </div>
 </div>
@@ -1346,6 +1348,141 @@ function clusterByDistance(points, maxDistKm = 500) {
     map[root].push(points[i]);
   }
   return Object.values(map);
+}
+
+// ── Service Area Import ───────────────────────────────────────────────────
+document.getElementById('importSvcBtn').addEventListener('click', () => {
+  document.getElementById('importSvcFile').value = '';
+  document.getElementById('importSvcFile').click();
+});
+
+document.getElementById('importSvcFile').addEventListener('change', function() {
+  const file = this.files[0];
+  if (!file) return;
+  if (!zipData.length) { toast('⚠ ZIP data still loading — please wait'); return; }
+  const reader = new FileReader();
+  reader.onload = e => processServiceAreaCSV(e.target.result, file.name);
+  reader.readAsText(file);
+});
+
+function processServiceAreaCSV(text, filename) {
+  // Format: row 1 = "Service Area" title, row 2 = headers
+  // Columns: Country, From Zip, To Zip, City, State, Carrier, From/To Point, ...
+  // Group by "From/To Point" (col index 6)
+  // Rows with no From Zip but a State → expand to all ZIPs in that state
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 3) { toast('⚠ CSV appears empty'); return; }
+
+  // Build lookups
+  const zipLookup  = new Map(zipData.map(z => [z[0], z]));
+  const stateLookup = new Map(); // state abbr → [zip, ...]
+  zipData.forEach(z => {
+    const st = z[4]; // state abbr
+    if (!stateLookup.has(st)) stateLookup.set(st, []);
+    stateLookup.get(st).push(z[0]);
+  });
+
+  const groups = {}; // terminal name → Set of ZIPs
+
+  for (let i = 2; i < lines.length; i++) {
+    const cols = parseCSVLine(lines[i]);
+    if (cols.length < 7) continue;
+    const fromZip  = cols[1].trim();
+    const state    = cols[4].trim();
+    const terminal = cols[6].trim();
+    if (!terminal) continue;
+
+    if (!groups[terminal]) groups[terminal] = new Set();
+
+    if (fromZip && fromZip.length >= 5) {
+      // Specific ZIP row
+      groups[terminal].add(fromZip);
+    } else if (state && state.length === 2) {
+      // State-level row — expand to all ZIPs for that state
+      const stateZips = stateLookup.get(state) || [];
+      stateZips.forEach(z => groups[terminal].add(z));
+    }
+  }
+
+  const terminalNames = Object.keys(groups);
+  if (!terminalNames.length) { toast('⚠ No terminals found in CSV'); return; }
+
+  if (shapes.length > 0 && !confirm(`Clear the ${shapes.length} area(s) on the map and import ${terminalNames.length} service areas from "${filename}"?`)) return;
+
+  // Clear map
+  drawnItems.clearLayers();
+  shapes = [];
+  shapeZips = {};
+  zipResult = [];
+
+  let imported = 0;
+  const allFound = new Set();
+
+  for (let i = 0; i < terminalNames.length; i++) {
+    const termName = terminalNames[i];
+    const termZips = [...groups[termName]];
+
+    const points = [];
+    const foundZips = [];
+    for (const zip of termZips) {
+      const entry = zipLookup.get(zip);
+      if (entry) {
+        points.push(turf.point([entry[2], entry[1]]));
+        foundZips.push(zip);
+        allFound.add(zip);
+      }
+    }
+
+    if (points.length < 1) continue;
+
+    const clusters = clusterByDistance(points, 500);
+    const color = SHAPE_COLORS[i % SHAPE_COLORS.length];
+    const id = Date.now() + i;
+    let mainLayer = null;
+    const extraLayers = [];
+
+    clusters.forEach(clusterPts => {
+      if (clusterPts.length < 1) return;
+      try {
+        let l;
+        const hull = clusterPts.length >= 3 ? turf.convex(turf.featureCollection(clusterPts)) : null;
+        if (hull) {
+          const coords = hull.geometry.coordinates[0].map(([lng, lat]) => [lat, lng]);
+          l = L.polygon(coords, { color, fillColor: color, weight: 2, fillOpacity: 0.12 });
+        } else if (clusterPts.length === 2) {
+          const coords = clusterPts.map(p => [p.geometry.coordinates[1], p.geometry.coordinates[0]]);
+          l = L.polyline(coords, { color, weight: 3, opacity: 0.7 });
+        } else {
+          const [lng, lat] = clusterPts[0].geometry.coordinates;
+          l = L.circleMarker([lat, lng], { color, fillColor: color, radius: 10, weight: 2, fillOpacity: 0.4 });
+        }
+        drawnItems.addLayer(l);
+        addLabelToLayer(l, termName);
+        if (!mainLayer) { l._shapeId = id; mainLayer = l; }
+        else { extraLayers.push(l); }
+      } catch(e) {}
+    });
+
+    if (!mainLayer) continue;
+    shapes.push({ id, layer: mainLayer, extraLayers, color, label: termName, imported: true });
+    shapeZips[id] = foundZips.sort();
+    imported++;
+  }
+
+  zipResult = Array.from(allFound).sort();
+  document.getElementById('saveBtn').disabled = !shapes.length;
+  renderShapesBar();
+  renderZipList();
+  computeAndRenderConflicts();
+
+  if (drawnItems.getLayers().length) {
+    try { map.fitBounds(drawnItems.getBounds(), { padding: [30, 30] }); } catch(e) {}
+  }
+
+  const pName = filename.replace(/\.[^.]+$/, '');
+  document.getElementById('projectNameInput').value = pName;
+  toast(`✓ Imported ${imported} terminals · ${zipResult.length.toLocaleString()} total ZIPs`);
+  setStatus(`✓ Imported ${imported} service area terminals from CSV · ${zipResult.length.toLocaleString()} ZIPs`, 'ok');
 }
 
 function parseCSVLine(line) {
