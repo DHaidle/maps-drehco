@@ -758,17 +758,20 @@ document.getElementById('copyBtn').addEventListener('click', () => {
 });
 
 document.getElementById('csvBtn').addEventListener('click', () => {
-  // Export format: "Start Postal Code","End Postal Code","Area/Route"
-  const rows = [['Start Postal Code','End Postal Code','Area/Route']];
+  // Export format matches the original import file (title row + header row + data)
+  const title = [['Zip To Area/Route']];
+  const header = [['Start Postal Code','End Postal Code','Area/Route']];
+  const dataRows = [];
   if (shapes.length > 0 && Object.keys(shapeZips).length > 0) {
     shapes.forEach(s => {
       const zips = (shapeZips[s.id] || []).slice().sort();
-      zips.forEach(z => rows.push([z, z, s.label]));
+      zips.forEach(z => dataRows.push([z, z, s.label]));
     });
   } else {
-    zipResult.forEach(z => rows.push([z, z, 'All Areas']));
+    zipResult.forEach(z => dataRows.push([z, z, 'All Areas']));
   }
-  const csv = rows.map(r => r.map(v => `"${v.toString().replace(/"/g,'""')}"`).join(',')).join('\n');
+  const toLine = r => r.map(v => `"${v.toString().replace(/"/g,'""')}"`).join(',');
+  const csv = [toLine(title[0]), toLine(header[0]), ...dataRows.map(toLine)].join('\n');
   const name = document.getElementById('projectNameInput').value.trim() || 'zip_codes';
   const blob = new Blob([csv], { type: 'text/csv' });
   const a = document.createElement('a');
