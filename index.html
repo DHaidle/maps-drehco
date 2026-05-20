@@ -843,8 +843,8 @@ function setShowAll(val) {
     (s.extraLayers || []).forEach(l => { if (l.setStyle) l.setStyle({ opacity: 1, fillOpacity: 0.15 }); });
   });
 
-  // Restore conflict markers
-  conflictMarkerLayer.eachLayer(m => m.setStyle && m.setStyle({ opacity: 1, fillOpacity: 0.9 }));
+  // Hide conflict markers in show-all mode (panel list is sufficient)
+  conflictMarkerLayer.eachLayer(m => m.setStyle && m.setStyle({ opacity: 0, fillOpacity: 0 }));
 
   // Restore full union ZIP list
   const found = new Set();
