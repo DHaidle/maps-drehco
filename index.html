@@ -365,9 +365,9 @@ function hslToHex(h, s, l) {
 function generateShades(baseHex, n) {
   if (n <= 1) return [baseHex];
   const [h, s, l] = hexToHsl(baseHex);
-  // Spread lightness: darker shades first, lighter last, staying within visible range
-  const minL = Math.max(22, l - 18);
-  const maxL = Math.min(68, l + 22);
+  // Wide spread: darkest → lightest, maximizing visual separation between terminals
+  const minL = Math.max(14, l - 30);
+  const maxL = Math.min(80, l + 34);
   return Array.from({length: n}, (_, i) => hslToHex(h, s, minL + (maxL - minL) * i / (n - 1)));
 }
 
