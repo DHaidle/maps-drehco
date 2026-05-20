@@ -65,10 +65,17 @@ body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:colum
 .zip-placeholder .icon{font-size:2.5rem;display:block;margin-bottom:10px}
 .shapes-bar{padding:8px 10px;border-top:1px solid #eee;background:#f7faff;flex-shrink:0;
   display:flex;gap:6px;flex-wrap:wrap;align-items:center}
-.shapes-bar-label{font-size:.7rem;color:#888;font-weight:700;text-transform:uppercase;letter-spacing:.4px;flex:0 0 100%}
+.shapes-bar-header{display:flex;align-items:center;justify-content:space-between;flex:0 0 100%;margin-bottom:2px}
+.shapes-bar-label{font-size:.7rem;color:#888;font-weight:700;text-transform:uppercase;letter-spacing:.4px}
+.show-all-btn{font-size:.68rem;padding:2px 8px;border-radius:8px;border:1.5px solid #2E75B6;
+  color:#2E75B6;background:#fff;cursor:pointer;font-weight:700;transition:all .15s;white-space:nowrap}
+.show-all-btn.active{background:#2E75B6;color:#fff}
+.show-all-btn:hover{background:#2E75B6;color:#fff}
 .shape-chip{padding:3px 9px;border-radius:10px;font-size:.72rem;font-weight:700;cursor:pointer;
-  color:#fff;display:inline-flex;align-items:center;gap:4px;transition:opacity .15s}
-.shape-chip:hover{opacity:.8}
+  color:#fff;display:inline-flex;align-items:center;gap:4px;transition:all .15s}
+.shape-chip:hover{opacity:.85}
+.shape-chip.focused{box-shadow:0 0 0 3px #fff,0 0 0 5px #1F3864;opacity:1}
+.shape-chip.dimmed{opacity:.35}
 .shape-chip .del{opacity:.7;font-size:.85em;margin-left:2px}
 
 /* ── Projects tab ── */
@@ -326,6 +333,8 @@ let zipResult = [];   // current computed ZIP union (no duplicates)
 let activeTab = 'zips';
 let currentProjectId = null;
 let pendingNameCb = null;
+let showAllMode   = true;
+let focusedShapeId = null;
 
 // ── Map init ──────────────────────────────────────────────────────────────
 const map = L.map('map', { center: [39.5, -98.35], zoom: 5 });
@@ -579,11 +588,20 @@ function renderShapesBar() {
   const chips = shapes.map(s => {
     const count = (shapeZips[s.id] || []).length;
     const countBadge = count ? ` (${count})` : '';
-    return `<span class="shape-chip" style="background:${s.color}" onclick="renameShape(${s.id})" title="Click to rename area">
-      ✏ ${esc(s.label)}${countBadge}<span class="shape-chip-edit" onclick="editShapeZips(${s.id},event)" title="Edit ZIP list">📋</span><span class="del" onclick="removeShape(${s.id},event)">✕</span>
+    const isFocused = !showAllMode && focusedShapeId === s.id;
+    const isDimmed  = !showAllMode && focusedShapeId !== s.id;
+    const cls = isFocused ? ' focused' : isDimmed ? ' dimmed' : '';
+    return `<span class="shape-chip${cls}" style="background:${s.color}" onclick="focusArea(${s.id})" title="Click to focus this area">
+      ${esc(s.label)}${countBadge}<span class="shape-chip-edit" onclick="renameShape(${s.id},event)" title="Rename">✏</span><span class="shape-chip-edit" onclick="editShapeZips(${s.id},event)" title="Edit ZIP list">📋</span><span class="del" onclick="removeShape(${s.id},event)">✕</span>
     </span>`;
   }).join('');
-  bar.innerHTML = `<span class="shapes-bar-label">Areas on map</span>${chips}`;
+  const showAllActive = showAllMode ? 'active' : '';
+  bar.innerHTML = `
+    <div class="shapes-bar-header">
+      <span class="shapes-bar-label">Areas on map</span>
+      <button class="show-all-btn ${showAllActive}" onclick="setShowAll(true)">👁 Show All</button>
+    </div>
+    ${chips}`;
 }
 
 function addLabelToLayer(layer, label) {
@@ -594,7 +612,65 @@ function addLabelToLayer(layer, label) {
   });
 }
 
-function renameShape(id) {
+// ── Focus / Show-All ─────────────────────────────────────────────────────
+function focusArea(id) {
+  if (showAllMode) {
+    // First click exits show-all and focuses
+    showAllMode = false;
+  }
+  focusedShapeId = id;
+
+  // Show/hide layers
+  shapes.forEach(s => {
+    const visible = s.id === id;
+    if (s.layer.setStyle) {
+      s.layer.setStyle(visible
+        ? { opacity: 1, fillOpacity: 0.2 }
+        : { opacity: 0, fillOpacity: 0 });
+    }
+  });
+
+  // Hide conflict markers in focus mode
+  conflictMarkerLayer.eachLayer(m => m.setStyle && m.setStyle({ opacity: 0, fillOpacity: 0 }));
+
+  // Show only focused area's ZIPs in panel
+  const s = shapes.find(x => x.id === id);
+  if (s) {
+    const zips = (shapeZips[id] || []);
+    zipResult = zips.slice().sort();
+    renderZipList();
+    // Zoom to this area
+    try { map.fitBounds(s.layer.getBounds(), { padding: [40, 40] }); } catch(e) {}
+  }
+
+  renderShapesBar();
+  setStatus(`Focused: ${s ? s.label : ''} · ${zipResult.length.toLocaleString()} ZIPs`, 'ok');
+}
+
+function setShowAll(val) {
+  showAllMode = val;
+  focusedShapeId = null;
+
+  // Restore all layers
+  shapes.forEach(s => {
+    if (s.layer.setStyle) s.layer.setStyle({ opacity: 1, fillOpacity: 0.15 });
+  });
+
+  // Restore conflict markers
+  conflictMarkerLayer.eachLayer(m => m.setStyle && m.setStyle({ opacity: 1, fillOpacity: 0.9 }));
+
+  // Restore full union ZIP list
+  const found = new Set();
+  for (const zips of Object.values(shapeZips)) zips.forEach(z => found.add(z));
+  zipResult = Array.from(found).sort();
+  renderZipList();
+
+  renderShapesBar();
+  setStatus(`✓ ${zipResult.length.toLocaleString()} ZIPs across ${shapes.length} areas`, 'ok');
+}
+
+function renameShape(id, e) {
+  if (e) e.stopPropagation();
   const s = shapes.find(x => x.id === id);
   if (!s) return;
   promptAreaName('Rename area', s.label, (name) => {
@@ -697,10 +773,15 @@ document.getElementById('clearBtn').addEventListener('click', () => {
   if (!confirm('Clear all shapes and start over?')) return;
   drawnItems.clearLayers();
   shapes = [];
+  shapeZips = {};
   zipResult = [];
   currentProjectId = null;
+  showAllMode = true;
+  focusedShapeId = null;
+  conflictMarkerLayer.clearLayers();
   document.getElementById('projectNameInput').value = '';
   document.getElementById('saveBtn').disabled = true;
+  document.getElementById('conflictSection').style.display = 'none';
   renderShapesBar();
   renderZipList();
   setStatus('Ready — draw a shape to find ZIPs', 'ok');
