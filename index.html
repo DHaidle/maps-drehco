@@ -1258,9 +1258,11 @@ function renderConflictMarkers() {
   for (const [zip, sids] of Object.entries(conflictData)) {
     const entry = zipLookup.get(zip);
     if (!entry) continue;
+    const visible = !showAllMode;
     const marker = L.circleMarker([entry[1], entry[2]], {
       radius: 7, color: '#fff', weight: 2,
-      fillColor: '#C00000', fillOpacity: 0.9
+      fillColor: '#C00000', fillOpacity: visible ? 0.9 : 0,
+      opacity: visible ? 1 : 0
     });
     marker.bindTooltip(zip, { direction: 'top', offset: [0, -6] });
     marker.on('contextmenu', function(e) {
