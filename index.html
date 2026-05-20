@@ -101,6 +101,18 @@ body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:colum
   box-shadow:0 4px 16px rgba(0,0,0,.3);transition:opacity .3s;pointer-events:none}
 .toast.hidden{opacity:0}
 
+/* ── Name modal ── */
+.name-modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10000;
+  display:none;align-items:center;justify-content:center}
+.name-modal-bg.open{display:flex}
+.name-modal{background:#fff;border-radius:10px;padding:22px 24px;min-width:320px;
+  box-shadow:0 8px 32px rgba(0,0,0,.3);border-top:4px solid var(--orange)}
+.name-modal h3{font-size:.95rem;font-weight:700;color:var(--navy);margin-bottom:12px}
+.name-modal input{width:100%;padding:8px 10px;border:1.5px solid #dde4ee;border-radius:6px;
+  font-size:.9rem;font-family:Arial;margin-bottom:14px;outline:none}
+.name-modal input:focus{border-color:var(--blue)}
+.name-modal-btns{display:flex;gap:8px;justify-content:flex-end}
+
 /* ── Leaflet draw overrides ── */
 .leaflet-draw-toolbar a{background-color:#fff !important}
 .leaflet-touch .leaflet-bar{border-radius:7px}
@@ -195,6 +207,18 @@ body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:colum
 <!-- Toast -->
 <div class="toast hidden" id="toast"></div>
 
+<!-- Area name modal -->
+<div class="name-modal-bg" id="nameModalBg">
+  <div class="name-modal">
+    <h3 id="nameModalTitle">Name this area</h3>
+    <input id="nameModalInput" type="text" placeholder="e.g. North Chicago" maxlength="60"/>
+    <div class="name-modal-btns">
+      <button class="btn btn-ghost btn-sm" id="nameModalCancel">Cancel</button>
+      <button class="btn btn-orange" id="nameModalOk">Save Name</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ── Config ─────────────────────────────────────────────────────────────────
 const SUPABASE_URL  = 'YOUR_SUPABASE_URL';   // e.g. https://xxxxx.supabase.co
@@ -204,9 +228,11 @@ const SHAPE_COLORS  = ['#2E75B6','#ED7D31','#375623','#C00000','#7030A0','#00B0F
 // ── State ──────────────────────────────────────────────────────────────────
 let zipData   = [];   // [[zip, lat, lng, city, state], ...]
 let shapes    = [];   // [{id, layer, color, label}]
-let zipResult = [];   // current computed ZIP list
+let shapeZips = {};   // {shapeId: [zip, ...]} — per-area ZIP lists for export
+let zipResult = [];   // current computed ZIP union (no duplicates)
 let activeTab = 'zips';
 let currentProjectId = null;
+let pendingNameCb = null;
 
 // ── Map init ──────────────────────────────────────────────────────────────
 const map = L.map('map', { center: [39.5, -98.35], zoom: 5 });
@@ -247,31 +273,33 @@ async function loadZipData() {
 function computeZips() {
   if (!zipData.length || !shapes.length) {
     zipResult = [];
+    shapeZips = {};
     renderZipList();
     return;
   }
 
   setStatus('Computing ZIPs…', 'loading');
+  shapeZips = {};
 
-  // Build union polygon from all shapes
-  const polygons = shapes.map(s => layerToTurfPolygon(s.layer)).filter(Boolean);
-  if (!polygons.length) { zipResult = []; renderZipList(); return; }
+  const polygons = shapes.map(s => ({ id: s.id, poly: layerToTurfPolygon(s.layer) })).filter(p => p.poly);
+  if (!polygons.length) { zipResult = []; shapeZips = {}; renderZipList(); return; }
 
-  // Collect matching ZIPs
+  // Collect per-shape ZIPs (a ZIP can appear in multiple overlapping areas)
   const found = new Set();
   for (const [zip, lat, lng] of zipData) {
     const pt = turf.point([lng, lat]);
-    for (const poly of polygons) {
+    for (const { id, poly } of polygons) {
       if (turf.booleanPointInPolygon(pt, poly)) {
+        if (!shapeZips[id]) shapeZips[id] = [];
+        shapeZips[id].push(zip);
         found.add(zip);
-        break;
       }
     }
   }
 
   zipResult = Array.from(found).sort();
   renderZipList();
-  setStatus(`✓ ${zipResult.length} ZIPs found in ${shapes.length} shape${shapes.length>1?'s':''}`, 'ok');
+  setStatus(`✓ ${zipResult.length} ZIPs across ${shapes.length} area${shapes.length>1?'s':''}`, 'ok');
 }
 
 function layerToTurfPolygon(layer) {
@@ -297,10 +325,17 @@ map.on(L.Draw.Event.CREATED, function(e) {
   drawnItems.addLayer(layer);
   const id = Date.now();
   layer._shapeId = id;
-  shapes.push({ id, layer, color, label: 'Shape ' + (shapes.length + 1) });
-  renderShapesBar();
+  const defaultName = 'Area ' + (shapes.length + 1);
+  shapes.push({ id, layer, color, label: defaultName });
   computeZips();
   document.getElementById('saveBtn').disabled = false;
+
+  // Prompt user to name the area
+  promptAreaName('Name this area', defaultName, (name) => {
+    const s = shapes.find(x => x.id === id);
+    if (s && name) s.label = name;
+    renderShapesBar();
+  });
 });
 
 map.on(L.Draw.Event.EDITED, function() { computeZips(); });
@@ -343,13 +378,22 @@ function renderShapesBar() {
   const bar = document.getElementById('shapesBar');
   if (!shapes.length) { bar.style.display = 'none'; return; }
   bar.style.display = 'flex';
-  // Keep label, replace chips
-  const chips = shapes.map(s =>
-    `<span class="shape-chip" style="background:${s.color}" data-id="${s.id}">
-      ${s.label}<span class="del" onclick="removeShape(${s.id},event)">✕</span>
-    </span>`
-  ).join('');
-  bar.innerHTML = `<span class="shapes-bar-label">Shapes on map</span>${chips}`;
+  const chips = shapes.map(s => {
+    const count = (shapeZips[s.id] || []).length;
+    const countBadge = count ? ` (${count})` : '';
+    return `<span class="shape-chip" style="background:${s.color}" onclick="renameShape(${s.id})" title="Click to rename">
+      ✏ ${esc(s.label)}${countBadge}<span class="del" onclick="removeShape(${s.id},event)">✕</span>
+    </span>`;
+  }).join('');
+  bar.innerHTML = `<span class="shapes-bar-label">Areas on map</span>${chips}`;
+}
+
+function renameShape(id) {
+  const s = shapes.find(x => x.id === id);
+  if (!s) return;
+  promptAreaName('Rename area', s.label, (name) => {
+    if (name) { s.label = name; renderShapesBar(); }
+  });
 }
 
 function removeShape(id, e) {
@@ -381,16 +425,25 @@ document.getElementById('copyBtn').addEventListener('click', () => {
 document.getElementById('csvBtn').addEventListener('click', () => {
   const zipInfo = {};
   for (const [zip,,, city, state] of zipData) zipInfo[zip] = { city, state };
-  const rows = [['ZIP Code','City','State']];
-  zipResult.forEach(z => rows.push([z, zipInfo[z]?.city||'', zipInfo[z]?.state||'']));
-  const csv = rows.map(r => r.map(v => `"${v}"`).join(',')).join('\n');
+  const rows = [['Area Name','ZIP Code','City','State']];
+  if (shapes.length > 0 && Object.keys(shapeZips).length > 0) {
+    // Export per-area (each ZIP tagged with its area name)
+    shapes.forEach(s => {
+      const zips = (shapeZips[s.id] || []).slice().sort();
+      zips.forEach(z => rows.push([s.label, z, zipInfo[z]?.city||'', zipInfo[z]?.state||'']));
+    });
+  } else {
+    // Fallback: union list
+    zipResult.forEach(z => rows.push(['All Areas', z, zipInfo[z]?.city||'', zipInfo[z]?.state||'']));
+  }
+  const csv = rows.map(r => r.map(v => `"${v.toString().replace(/"/g,'""')}"`).join(',')).join('\n');
   const name = document.getElementById('projectNameInput').value.trim() || 'zip_codes';
   const blob = new Blob([csv], { type: 'text/csv' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = name.replace(/[^a-z0-9_-]/gi,'_') + '_zips.csv';
   a.click();
-  toast('Exported ' + zipResult.length + ' ZIPs as CSV');
+  toast(`Exported ${rows.length - 1} rows across ${shapes.length} area${shapes.length>1?'s':''}`);
 });
 
 // ── Clear ──────────────────────────────────────────────────────────────────
@@ -587,6 +640,32 @@ function formatDate(iso) {
   try { return new Date(iso).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }); }
   catch(e) { return iso.slice(0,10); }
 }
+
+// ── Area name modal ────────────────────────────────────────────────────────
+function promptAreaName(title, defaultVal, cb) {
+  document.getElementById('nameModalTitle').textContent = title;
+  const input = document.getElementById('nameModalInput');
+  input.value = defaultVal;
+  document.getElementById('nameModalBg').classList.add('open');
+  setTimeout(() => { input.focus(); input.select(); }, 50);
+  pendingNameCb = cb;
+}
+
+document.getElementById('nameModalOk').addEventListener('click', () => {
+  const val = document.getElementById('nameModalInput').value.trim();
+  document.getElementById('nameModalBg').classList.remove('open');
+  if (pendingNameCb) { pendingNameCb(val || null); pendingNameCb = null; }
+});
+
+document.getElementById('nameModalCancel').addEventListener('click', () => {
+  document.getElementById('nameModalBg').classList.remove('open');
+  if (pendingNameCb) { pendingNameCb(null); pendingNameCb = null; }
+});
+
+document.getElementById('nameModalInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter')  document.getElementById('nameModalOk').click();
+  if (e.key === 'Escape') document.getElementById('nameModalCancel').click();
+});
 
 // ── Boot ───────────────────────────────────────────────────────────────────
 loadZipData();
