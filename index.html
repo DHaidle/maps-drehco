@@ -1415,9 +1415,13 @@ function processImportedCSV(text, filename) {
 
   // Clear map
   drawnItems.clearLayers();
+  focusDotLayer.clearLayers();
+  conflictMarkerLayer.clearLayers();
   shapes = [];
   shapeZips = {};
   zipResult = [];
+  showAllMode = true;
+  focusedShapeIds.clear();
 
   let imported = 0;
   const allFound = new Set();
@@ -1613,9 +1617,13 @@ function processServiceAreaCSV(text, filename) {
   if (shapes.length > 0 && !confirm(`Clear the ${shapes.length} area(s) on the map and import from "${filename}"?`)) return;
 
   drawnItems.clearLayers();
+  focusDotLayer.clearLayers();
+  conflictMarkerLayer.clearLayers();
   shapes = [];
   shapeZips = {};
   zipResult = [];
+  showAllMode = true;
+  focusedShapeIds.clear();
 
   let imported = 0;
   let colorIdx = 0;
