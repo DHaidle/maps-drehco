@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ZIP Code Map — maps.drehco.com</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--navy:#1F3864;--blue:#2E75B6;--orange:#ED7D31;--green:#375623;--red:#C00000;--bg:#eef2f7}
+body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
+
+/* ── Header ── */
+.header{background:linear-gradient(135deg,var(--navy),var(--blue));color:#fff;padding:10px 16px;
+  display:flex;align-items:center;gap:12px;flex-shrink:0;box-shadow:0 2px 8px rgba(0,0,0,.3);z-index:1000}
+.header h1{font-size:1.05rem;font-weight:700;white-space:nowrap}
+.header p{font-size:.72rem;opacity:.7;margin-top:1px}
+.header-spacer{flex:1}
+.project-bar{display:flex;align-items:center;gap:8px}
+.project-bar label{font-size:.75rem;opacity:.8;white-space:nowrap}
+#projectNameInput{padding:5px 9px;border-radius:5px;border:1.5px solid rgba(255,255,255,.3);
+  background:rgba(255,255,255,.12);color:#fff;font-size:.82rem;font-family:Arial;width:180px}
+#projectNameInput::placeholder{color:rgba(255,255,255,.45)}
+#projectNameInput:focus{outline:none;border-color:#fff;background:rgba(255,255,255,.2)}
+.btn{padding:6px 14px;border:none;border-radius:6px;font-size:.8rem;font-weight:700;cursor:pointer;
+  transition:all .15s;display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.btn-orange{background:var(--orange);color:#fff}.btn-orange:hover{background:#d06a20}
+.btn-ghost{background:rgba(255,255,255,.15);color:#fff;border:1.5px solid rgba(255,255,255,.3)}
+.btn-ghost:hover{background:rgba(255,255,255,.25)}
+.btn-green{background:var(--green);color:#fff}.btn-green:hover{background:#2a4219}
+.btn-red{background:var(--red);color:#fff}.btn-red:hover{background:#900}
+.btn-blue{background:var(--blue);color:#fff}.btn-blue:hover{background:#1a5a9e}
+.btn-sm{padding:4px 10px;font-size:.74rem}
+.btn-xs{padding:3px 8px;font-size:.7rem}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+
+/* ── Main layout ── */
+.main{display:flex;flex:1;min-height:0}
+#map{flex:1;min-width:0;z-index:1}
+
+/* ── Right panel ── */
+.panel{width:320px;flex-shrink:0;background:#fff;border-left:2px solid #dde4ee;
+  display:flex;flex-direction:column;overflow:hidden}
+.panel-tabs{display:flex;border-bottom:2px solid #dde4ee;flex-shrink:0}
+.ptab{flex:1;padding:9px 4px;font-size:.8rem;font-weight:700;cursor:pointer;
+  text-align:center;color:#888;border-bottom:3px solid transparent;transition:all .15s}
+.ptab.active{color:var(--blue);border-bottom-color:var(--blue)}
+
+/* ── ZIP results tab ── */
+.zip-panel{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.zip-header{padding:12px 14px;border-bottom:1px solid #eee;flex-shrink:0}
+.zip-count{font-size:1.5rem;font-weight:700;color:var(--navy);line-height:1}
+.zip-label{font-size:.72rem;color:#888;margin-top:2px}
+.zip-actions{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+.zip-list-wrap{flex:1;overflow-y:auto;padding:8px 0}
+.zip-chip{display:inline-block;margin:2px 3px;padding:3px 8px;background:#eef2f7;
+  border:1px solid #dde4ee;border-radius:4px;font-size:.78rem;font-family:monospace;
+  font-weight:600;color:var(--navy);cursor:default}
+.zip-chip:hover{background:#d6e4f7;border-color:var(--blue)}
+.zip-placeholder{padding:32px 16px;text-align:center;color:#aaa;font-size:.85rem;line-height:1.6}
+.zip-placeholder .icon{font-size:2.5rem;display:block;margin-bottom:10px}
+.shapes-bar{padding:8px 10px;border-top:1px solid #eee;background:#f7faff;flex-shrink:0;
+  display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.shapes-bar-label{font-size:.7rem;color:#888;font-weight:700;text-transform:uppercase;letter-spacing:.4px;flex:0 0 100%}
+.shape-chip{padding:3px 9px;border-radius:10px;font-size:.72rem;font-weight:700;cursor:pointer;
+  color:#fff;display:inline-flex;align-items:center;gap:4px;transition:opacity .15s}
+.shape-chip:hover{opacity:.8}
+.shape-chip .del{opacity:.7;font-size:.85em;margin-left:2px}
+
+/* ── Projects tab ── */
+.projects-panel{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.projects-header{padding:10px 14px;border-bottom:1px solid #eee;flex-shrink:0;
+  display:flex;align-items:center;justify-content:space-between}
+.projects-header span{font-size:.82rem;font-weight:700;color:var(--navy)}
+.projects-list{flex:1;overflow-y:auto;padding:6px}
+.project-card{background:#f7faff;border:1.5px solid #dde4ee;border-radius:8px;padding:10px 12px;
+  margin-bottom:6px;cursor:pointer;transition:all .15s}
+.project-card:hover{border-color:var(--blue);background:#eef4fb}
+.project-card.active{border-color:var(--blue);background:#d6e8fb}
+.project-card-name{font-size:.88rem;font-weight:700;color:var(--navy)}
+.project-card-meta{font-size:.72rem;color:#888;margin-top:3px}
+.project-card-actions{display:flex;gap:4px;margin-top:7px}
+.projects-empty{padding:32px 16px;text-align:center;color:#aaa;font-size:.82rem;line-height:1.6}
+
+/* ── Status bar ── */
+.status-bar{background:var(--navy);color:#fff;font-size:.72rem;padding:4px 12px;
+  display:flex;align-items:center;gap:12px;flex-shrink:0}
+.status-bar span{opacity:.7}
+.status-dot{width:7px;height:7px;border-radius:50%;background:#4CAF50;flex-shrink:0}
+.status-dot.loading{background:#ED7D31;animation:pulse 1s infinite}
+.status-dot.error{background:var(--red)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* ── Toast ── */
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a2a3a;color:#fff;
+  padding:10px 20px;border-radius:8px;font-size:.85rem;font-weight:700;z-index:9999;
+  box-shadow:0 4px 16px rgba(0,0,0,.3);transition:opacity .3s;pointer-events:none}
+.toast.hidden{opacity:0}
+
+/* ── Leaflet draw overrides ── */
+.leaflet-draw-toolbar a{background-color:#fff !important}
+.leaflet-touch .leaflet-bar{border-radius:7px}
+
+/* ── Loading overlay ── */
+#loadingOverlay{position:fixed;inset:0;background:rgba(31,56,100,.92);color:#fff;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;gap:14px}
+#loadingOverlay h2{font-size:1.1rem;font-weight:700}
+#loadingOverlay p{font-size:.82rem;opacity:.7}
+.spinner{width:40px;height:40px;border:4px solid rgba(255,255,255,.2);border-top-color:#fff;
+  border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+
+<!-- Loading overlay -->
+<div id="loadingOverlay">
+  <div class="spinner"></div>
+  <h2>Loading ZIP Data…</h2>
+  <p>Fetching 41,898 US ZIP code centroids</p>
+</div>
+
+<!-- Header -->
+<div class="header">
+  <div>
+    <h1>📍 ZIP Code Map Tool</h1>
+    <p>Draw a shape — get every ZIP inside it</p>
+  </div>
+  <div class="header-spacer"></div>
+  <div class="project-bar">
+    <label>Project:</label>
+    <input id="projectNameInput" type="text" placeholder="Untitled project" maxlength="80"/>
+    <button class="btn btn-orange" id="saveBtn" disabled>💾 Save Project</button>
+    <button class="btn btn-ghost btn-sm" id="clearBtn">🗑 Clear</button>
+  </div>
+</div>
+
+<!-- Main -->
+<div class="main">
+  <div id="map"></div>
+
+  <div class="panel">
+    <div class="panel-tabs">
+      <div class="ptab active" data-tab="zips">📋 ZIP Results</div>
+      <div class="ptab" data-tab="projects">📁 Projects</div>
+    </div>
+
+    <!-- ZIP Results tab -->
+    <div id="tabZips" class="zip-panel">
+      <div class="zip-header">
+        <div class="zip-count" id="zipCount">0</div>
+        <div class="zip-label">ZIP codes in drawn area</div>
+        <div class="zip-actions">
+          <button class="btn btn-green btn-sm" id="copyBtn" disabled>📋 Copy List</button>
+          <button class="btn btn-blue btn-sm" id="csvBtn" disabled>⬇ Export CSV</button>
+        </div>
+      </div>
+      <div class="zip-list-wrap" id="zipListWrap">
+        <div class="zip-placeholder">
+          <span class="icon">✏️</span>
+          Use the draw tools on the map to select an area.<br><br>
+          <strong>Polygon</strong> — draw any shape<br>
+          <strong>Rectangle</strong> — drag a box<br>
+          <strong>Circle</strong> — radius from a center point
+        </div>
+      </div>
+      <div class="shapes-bar" id="shapesBar" style="display:none">
+        <span class="shapes-bar-label">Shapes on map</span>
+      </div>
+    </div>
+
+    <!-- Projects tab -->
+    <div id="tabProjects" class="projects-panel" style="display:none">
+      <div class="projects-header">
+        <span>Saved Projects</span>
+        <button class="btn btn-blue btn-sm" id="refreshProjectsBtn">↻ Refresh</button>
+      </div>
+      <div class="projects-list" id="projectsList">
+        <div class="projects-empty" id="projectsEmpty">Loading projects…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Status bar -->
+<div class="status-bar">
+  <div class="status-dot" id="statusDot"></div>
+  <span id="statusText">Loading ZIP data…</span>
+</div>
+
+<!-- Toast -->
+<div class="toast hidden" id="toast"></div>
+
+<script>
+// ── Config ─────────────────────────────────────────────────────────────────
+const SUPABASE_URL  = 'YOUR_SUPABASE_URL';   // e.g. https://xxxxx.supabase.co
+const SUPABASE_KEY  = 'YOUR_SUPABASE_ANON_KEY';
+const SHAPE_COLORS  = ['#2E75B6','#ED7D31','#375623','#C00000','#7030A0','#00B0F0','#FF6600'];
+
+// ── State ──────────────────────────────────────────────────────────────────
+let zipData   = [];   // [[zip, lat, lng, city, state], ...]
+let shapes    = [];   // [{id, layer, color, label}]
+let zipResult = [];   // current computed ZIP list
+let activeTab = 'zips';
+let currentProjectId = null;
+
+// ── Map init ──────────────────────────────────────────────────────────────
+const map = L.map('map', { center: [39.5, -98.35], zoom: 5 });
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors', maxZoom: 18
+}).addTo(map);
+
+const drawnItems = new L.FeatureGroup().addTo(map);
+const drawControl = new L.Control.Draw({
+  edit: { featureGroup: drawnItems, edit: true, remove: false },
+  draw: {
+    polygon:   { shapeOptions: { color: SHAPE_COLORS[0], weight: 2, fillOpacity: 0.15 } },
+    rectangle: { shapeOptions: { color: SHAPE_COLORS[0], weight: 2, fillOpacity: 0.15 } },
+    circle:    { shapeOptions: { color: SHAPE_COLORS[0], weight: 2, fillOpacity: 0.15 } },
+    polyline:  false,
+    marker:    false,
+    circlemarker: false
+  }
+});
+map.addControl(drawControl);
+
+// ── ZIP data load ─────────────────────────────────────────────────────────
+async function loadZipData() {
+  try {
+    const res = await fetch('/data/zip_centroids.json');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    zipData = await res.json();
+    document.getElementById('loadingOverlay').style.display = 'none';
+    setStatus(`✓ ${zipData.length.toLocaleString()} ZIP codes loaded`, 'ok');
+  } catch(e) {
+    document.getElementById('loadingOverlay').innerHTML =
+      '<h2 style="color:#ffaaaa">⚠ Failed to load ZIP data</h2><p>' + e.message + '</p>';
+    setStatus('Error loading ZIP data', 'error');
+  }
+}
+
+// ── ZIP lookup ────────────────────────────────────────────────────────────
+function computeZips() {
+  if (!zipData.length || !shapes.length) {
+    zipResult = [];
+    renderZipList();
+    return;
+  }
+
+  setStatus('Computing ZIPs…', 'loading');
+
+  // Build union polygon from all shapes
+  const polygons = shapes.map(s => layerToTurfPolygon(s.layer)).filter(Boolean);
+  if (!polygons.length) { zipResult = []; renderZipList(); return; }
+
+  // Collect matching ZIPs
+  const found = new Set();
+  for (const [zip, lat, lng] of zipData) {
+    const pt = turf.point([lng, lat]);
+    for (const poly of polygons) {
+      if (turf.booleanPointInPolygon(pt, poly)) {
+        found.add(zip);
+        break;
+      }
+    }
+  }
+
+  zipResult = Array.from(found).sort();
+  renderZipList();
+  setStatus(`✓ ${zipResult.length} ZIPs found in ${shapes.length} shape${shapes.length>1?'s':''}`, 'ok');
+}
+
+function layerToTurfPolygon(layer) {
+  try {
+    if (layer instanceof L.Circle) {
+      const center = layer.getLatLng();
+      const radius = layer.getRadius(); // meters
+      return turf.circle([center.lng, center.lat], radius/1000, {units:'kilometers'});
+    }
+    const geojson = layer.toGeoJSON();
+    if (geojson.geometry.type === 'Polygon' || geojson.geometry.type === 'MultiPolygon') {
+      return geojson;
+    }
+    return null;
+  } catch(e) { return null; }
+}
+
+// ── Draw events ────────────────────────────────────────────────────────────
+map.on(L.Draw.Event.CREATED, function(e) {
+  const color = SHAPE_COLORS[shapes.length % SHAPE_COLORS.length];
+  const layer = e.layer;
+  if (layer.setStyle) layer.setStyle({ color, fillColor: color, weight: 2, fillOpacity: 0.15 });
+  drawnItems.addLayer(layer);
+  const id = Date.now();
+  layer._shapeId = id;
+  shapes.push({ id, layer, color, label: 'Shape ' + (shapes.length + 1) });
+  renderShapesBar();
+  computeZips();
+  document.getElementById('saveBtn').disabled = false;
+});
+
+map.on(L.Draw.Event.EDITED, function() { computeZips(); });
+map.on(L.Draw.Event.DELETED, function(e) {
+  e.layers.eachLayer(layer => {
+    shapes = shapes.filter(s => s.id !== layer._shapeId);
+  });
+  renderShapesBar();
+  computeZips();
+  if (!shapes.length) document.getElementById('saveBtn').disabled = true;
+});
+
+// ── Render functions ──────────────────────────────────────────────────────
+function renderZipList() {
+  const wrap = document.getElementById('zipListWrap');
+  const countEl = document.getElementById('zipCount');
+  countEl.textContent = zipResult.length.toLocaleString();
+  document.getElementById('copyBtn').disabled = !zipResult.length;
+  document.getElementById('csvBtn').disabled  = !zipResult.length;
+
+  if (!zipResult.length) {
+    if (!shapes.length) {
+      wrap.innerHTML = `<div class="zip-placeholder"><span class="icon">✏️</span>Use the draw tools on the map to select an area.<br><br><strong>Polygon</strong> — draw any shape<br><strong>Rectangle</strong> — drag a box<br><strong>Circle</strong> — radius from a center point</div>`;
+    } else {
+      wrap.innerHTML = `<div class="zip-placeholder"><span class="icon">🔍</span>No ZIP codes found in the drawn area.</div>`;
+    }
+    return;
+  }
+
+  // Build a map of zip → city/state for display
+  const zipInfo = {};
+  for (const [zip,,, city, state] of zipData) zipInfo[zip] = city + ', ' + state;
+
+  wrap.innerHTML = zipResult.map(z =>
+    `<span class="zip-chip" title="${zipInfo[z]||''}">${z}</span>`
+  ).join('');
+}
+
+function renderShapesBar() {
+  const bar = document.getElementById('shapesBar');
+  if (!shapes.length) { bar.style.display = 'none'; return; }
+  bar.style.display = 'flex';
+  // Keep label, replace chips
+  const chips = shapes.map(s =>
+    `<span class="shape-chip" style="background:${s.color}" data-id="${s.id}">
+      ${s.label}<span class="del" onclick="removeShape(${s.id},event)">✕</span>
+    </span>`
+  ).join('');
+  bar.innerHTML = `<span class="shapes-bar-label">Shapes on map</span>${chips}`;
+}
+
+function removeShape(id, e) {
+  e.stopPropagation();
+  const s = shapes.find(x => x.id === id);
+  if (s) { drawnItems.removeLayer(s.layer); shapes = shapes.filter(x => x.id !== id); }
+  renderShapesBar();
+  computeZips();
+  if (!shapes.length) document.getElementById('saveBtn').disabled = true;
+}
+
+// ── Tab switching ──────────────────────────────────────────────────────────
+document.querySelectorAll('.ptab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    activeTab = tab.dataset.tab;
+    document.querySelectorAll('.ptab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('tabZips').style.display     = activeTab === 'zips'     ? 'flex' : 'none';
+    document.getElementById('tabProjects').style.display = activeTab === 'projects' ? 'flex' : 'none';
+    if (activeTab === 'projects') loadProjects();
+  });
+});
+
+// ── Copy / Export ──────────────────────────────────────────────────────────
+document.getElementById('copyBtn').addEventListener('click', () => {
+  navigator.clipboard.writeText(zipResult.join('\n')).then(() => toast('Copied ' + zipResult.length + ' ZIPs to clipboard'));
+});
+
+document.getElementById('csvBtn').addEventListener('click', () => {
+  const zipInfo = {};
+  for (const [zip,,, city, state] of zipData) zipInfo[zip] = { city, state };
+  const rows = [['ZIP Code','City','State']];
+  zipResult.forEach(z => rows.push([z, zipInfo[z]?.city||'', zipInfo[z]?.state||'']));
+  const csv = rows.map(r => r.map(v => `"${v}"`).join(',')).join('\n');
+  const name = document.getElementById('projectNameInput').value.trim() || 'zip_codes';
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name.replace(/[^a-z0-9_-]/gi,'_') + '_zips.csv';
+  a.click();
+  toast('Exported ' + zipResult.length + ' ZIPs as CSV');
+});
+
+// ── Clear ──────────────────────────────────────────────────────────────────
+document.getElementById('clearBtn').addEventListener('click', () => {
+  if (!confirm('Clear all shapes and start over?')) return;
+  drawnItems.clearLayers();
+  shapes = [];
+  zipResult = [];
+  currentProjectId = null;
+  document.getElementById('projectNameInput').value = '';
+  document.getElementById('saveBtn').disabled = true;
+  renderShapesBar();
+  renderZipList();
+  setStatus('Ready — draw a shape to find ZIPs', 'ok');
+});
+
+// ── Save project ──────────────────────────────────────────────────────────
+document.getElementById('saveBtn').addEventListener('click', async () => {
+  const name = document.getElementById('projectNameInput').value.trim() || 'Untitled Project';
+  document.getElementById('projectNameInput').value = name;
+
+  const shapesGeoJSON = shapes.map(s => {
+    try {
+      if (s.layer instanceof L.Circle) {
+        return { type: 'Circle', center: s.layer.getLatLng(), radius: s.layer.getRadius(), color: s.color, label: s.label };
+      }
+      return { ...s.layer.toGeoJSON(), color: s.color, label: s.label };
+    } catch(e) { return null; }
+  }).filter(Boolean);
+
+  const body = {
+    name,
+    shapes: shapesGeoJSON,
+    zip_list: zipResult,
+    zip_count: zipResult.length
+  };
+  if (currentProjectId) body.id = currentProjectId;
+
+  try {
+    setStatus('Saving…', 'loading');
+    const res = await fetch('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Save failed');
+    currentProjectId = data.id;
+    toast('✓ Project saved — ' + zipResult.length + ' ZIPs');
+    setStatus('Saved: ' + name, 'ok');
+    if (activeTab === 'projects') loadProjects();
+  } catch(e) {
+    toast('⚠ Save failed: ' + e.message);
+    setStatus('Save error', 'error');
+  }
+});
+
+// ── Load / manage projects ────────────────────────────────────────────────
+document.getElementById('refreshProjectsBtn').addEventListener('click', loadProjects);
+
+async function loadProjects() {
+  const list = document.getElementById('projectsList');
+  const empty = document.getElementById('projectsEmpty');
+  list.innerHTML = '<div class="projects-empty">Loading…</div>';
+  try {
+    const res = await fetch('/api/projects');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Load failed');
+    if (!data.length) {
+      list.innerHTML = '<div class="projects-empty">No saved projects yet.<br>Draw shapes and click Save Project.</div>';
+      return;
+    }
+    list.innerHTML = data.map(p => `
+      <div class="project-card ${p.id === currentProjectId ? 'active' : ''}" data-id="${p.id}">
+        <div class="project-card-name">${esc(p.name)}</div>
+        <div class="project-card-meta">${p.zip_count || 0} ZIPs · Saved ${formatDate(p.created_at)}</div>
+        <div class="project-card-actions">
+          <button class="btn btn-blue btn-xs" onclick="openProject('${p.id}',event)">📂 Load</button>
+          <button class="btn btn-green btn-xs" onclick="downloadProject('${p.id}',event)">⬇ CSV</button>
+          <button class="btn btn-red btn-xs" onclick="deleteProject('${p.id}',event)">🗑 Delete</button>
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {
+    list.innerHTML = `<div class="projects-empty">⚠ ${e.message}</div>`;
+  }
+}
+
+async function openProject(id, e) {
+  e.stopPropagation();
+  try {
+    const res = await fetch('/api/projects?id=' + id);
+    const p = await res.json();
+    if (!res.ok) throw new Error(p.error || 'Load failed');
+
+    // Clear existing
+    drawnItems.clearLayers();
+    shapes = [];
+
+    // Restore shapes
+    (p.shapes || []).forEach((s, i) => {
+      let layer;
+      try {
+        if (s.type === 'Circle') {
+          layer = L.circle([s.center.lat, s.center.lng], { radius: s.radius });
+        } else {
+          layer = L.geoJSON(s).getLayers()[0];
+        }
+        if (!layer) return;
+        const color = s.color || SHAPE_COLORS[i % SHAPE_COLORS.length];
+        if (layer.setStyle) layer.setStyle({ color, fillColor: color, weight: 2, fillOpacity: 0.15 });
+        drawnItems.addLayer(layer);
+        const sid = Date.now() + i;
+        layer._shapeId = sid;
+        shapes.push({ id: sid, layer, color, label: s.label || 'Shape ' + (i+1) });
+      } catch(e) { console.warn('Shape restore error', e); }
+    });
+
+    // Restore ZIP list
+    zipResult = p.zip_list || [];
+    currentProjectId = p.id;
+    document.getElementById('projectNameInput').value = p.name || '';
+    document.getElementById('saveBtn').disabled = !shapes.length;
+
+    renderShapesBar();
+    renderZipList();
+
+    // Zoom to shapes
+    if (drawnItems.getLayers().length) {
+      try { map.fitBounds(drawnItems.getBounds(), { padding: [40, 40] }); } catch(e) {}
+    }
+
+    setStatus('Loaded: ' + p.name + ' · ' + zipResult.length + ' ZIPs', 'ok');
+    toast('📂 Loaded: ' + p.name);
+
+    // Switch to ZIP tab
+    document.querySelector('[data-tab="zips"]').click();
+  } catch(e) {
+    toast('⚠ Load failed: ' + e.message);
+  }
+}
+
+async function downloadProject(id, e) {
+  e.stopPropagation();
+  try {
+    const res = await fetch('/api/projects?id=' + id);
+    const p = await res.json();
+    if (!res.ok) throw new Error(p.error || 'Load failed');
+    const zipInfo = {};
+    for (const [zip,,, city, state] of zipData) zipInfo[zip] = { city, state };
+    const rows = [['ZIP Code','City','State']];
+    (p.zip_list || []).forEach(z => rows.push([z, zipInfo[z]?.city||'', zipInfo[z]?.state||'']));
+    const csv = rows.map(r => r.map(v => `"${v}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = (p.name||'project').replace(/[^a-z0-9_-]/gi,'_') + '_zips.csv';
+    a.click();
+    toast('⬇ Downloaded CSV for: ' + p.name);
+  } catch(e) { toast('⚠ Download failed: ' + e.message); }
+}
+
+async function deleteProject(id, e) {
+  e.stopPropagation();
+  if (!confirm('Delete this project? This cannot be undone.')) return;
+  try {
+    const res = await fetch('/api/projects?id=' + id, { method: 'DELETE' });
+    if (!res.ok) { const d = await res.json(); throw new Error(d.error||'Delete failed'); }
+    if (currentProjectId === id) { currentProjectId = null; }
+    toast('🗑 Project deleted');
+    loadProjects();
+  } catch(e) { toast('⚠ Delete failed: ' + e.message); }
+}
+
+// ── Utilities ──────────────────────────────────────────────────────────────
+function setStatus(text, type='ok') {
+  document.getElementById('statusText').textContent = text;
+  const dot = document.getElementById('statusDot');
+  dot.className = 'status-dot' + (type==='loading'?' loading':type==='error'?' error':'');
+}
+
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.add('hidden'), 3000);
+}
+
+function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function formatDate(iso) {
+  if (!iso) return '';
+  try { return new Date(iso).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }); }
+  catch(e) { return iso.slice(0,10); }
+}
+
+// ── Boot ───────────────────────────────────────────────────────────────────
+loadZipData();
+setStatus('Loading ZIP data…', 'loading');
+</script>
+</body>
+</html>
