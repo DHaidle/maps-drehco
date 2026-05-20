@@ -1261,32 +1261,41 @@ function processImportedCSV(text, filename) {
 }
 
 // ── Geographic clustering (splits disconnected ZIP groups into separate hulls) ─
+// Uses union-find so it works regardless of which Turf functions are available.
 function clusterByDistance(points, maxDistKm = 500) {
   if (points.length < 2) return [points];
-  try {
-    const fc = turf.featureCollection(points);
-    const clustered = turf.clustersDbscan(fc, maxDistKm, { units: 'kilometers', minPoints: 2 });
-    const clusterMap = {};
-    const noise = [];
-    clustered.features.forEach(f => {
-      if (f.properties.dbscan === 'noise') { noise.push(f); return; }
-      const cid = f.properties.cluster;
-      if (!clusterMap[cid]) clusterMap[cid] = [];
-      clusterMap[cid].push(f);
-    });
-    const clusters = Object.values(clusterMap);
-    // Assign noise points to nearest cluster (or their own if no clusters)
-    noise.forEach(np => {
-      if (!clusters.length) { clusters.push([np]); return; }
-      let minDist = Infinity, nearest = clusters[0];
-      clusters.forEach(cl => cl.forEach(cp => {
-        const d = turf.distance(np, cp, { units: 'kilometers' });
-        if (d < minDist) { minDist = d; nearest = cl; }
-      }));
-      nearest.push(np);
-    });
-    return clusters.length ? clusters : [points];
-  } catch(e) { return [points]; }
+  const n = points.length;
+  // Union-Find helpers
+  const parent = Array.from({length: n}, (_, i) => i);
+  function find(i) { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; }
+  function union(a, b) { parent[find(a)] = find(b); }
+  // Haversine distance (km) — no Turf dependency
+  function haversineDist(a, b) {
+    const R = 6371;
+    const [la1, lo1] = a.geometry.coordinates.slice().reverse(); // [lat,lng] from [lng,lat]
+    const [la2, lo2] = b.geometry.coordinates.slice().reverse();
+    const dLat = (la2 - la1) * Math.PI / 180;
+    const dLon = (lo2 - lo1) * Math.PI / 180;
+    const sinDlat = Math.sin(dLat / 2), sinDlon = Math.sin(dLon / 2);
+    const x = sinDlat * sinDlat + Math.cos(la1 * Math.PI / 180) * Math.cos(la2 * Math.PI / 180) * sinDlon * sinDlon;
+    return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+  }
+  // Union pairs within threshold
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (find(i) !== find(j) && haversineDist(points[i], points[j]) <= maxDistKm) {
+        union(i, j);
+      }
+    }
+  }
+  // Group by root
+  const map = {};
+  for (let i = 0; i < n; i++) {
+    const root = find(i);
+    if (!map[root]) map[root] = [];
+    map[root].push(points[i]);
+  }
+  return Object.values(map);
 }
 
 function parseCSVLine(line) {
