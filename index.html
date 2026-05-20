@@ -243,6 +243,7 @@ body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:colum
         <div class="zip-actions">
           <button class="btn btn-green btn-sm" id="copyBtn" disabled>📋 Copy List</button>
           <button class="btn btn-blue btn-sm" id="csvBtn" disabled>⬇ Export CSV</button>
+          <button class="btn btn-sm" id="unassignedBtn" title="Show only ZIPs not yet in any area" style="background:#f0f0f0;color:#555;border:1.5px solid #ccc">⬜ Unassigned Only</button>
         </div>
       </div>
       <!-- Shared ZIPs section -->
@@ -339,8 +340,9 @@ let activeTab = 'zips';
 let shapeSort = 'alpha'; // 'alpha' | 'geo'
 let currentProjectId = null;
 let pendingNameCb = null;
-let showAllMode    = true;
-let focusedShapeIds = new Set(); // supports multi-select
+let showAllMode       = true;
+let focusedShapeIds   = new Set(); // supports multi-select
+let showUnassignedOnly = false;    // filter ZIP panel to unassigned ZIPs only
 
 // ── Map init ──────────────────────────────────────────────────────────────
 const map = L.map('map', { center: [39.5, -98.35], zoom: 5 });
@@ -447,7 +449,10 @@ mapEl.addEventListener('mouseup', (e) => {
   drawnItems.addLayer(layer);
   const id = Date.now();
   layer._shapeId = id;
-  const defaultName = 'Area ' + (shapes.length + 1);
+  const unassignedCount = shapes.filter(s => /^Unassigned(\s\d+)?$/.test(s.label)).length;
+  const defaultName = showUnassignedOnly
+    ? (unassignedCount === 0 ? 'Unassigned' : 'Unassigned ' + (unassignedCount + 1))
+    : 'Area ' + (shapes.length + 1);
   shapes.push({ id, layer, color, label: defaultName });
   addLabelToLayer(layer, defaultName);
   computeZips();
@@ -537,7 +542,10 @@ map.on(L.Draw.Event.CREATED, function(e) {
   drawnItems.addLayer(layer);
   const id = Date.now();
   layer._shapeId = id;
-  const defaultName = 'Area ' + (shapes.length + 1);
+  const unassignedCount = shapes.filter(s => /^Unassigned(\s\d+)?$/.test(s.label)).length;
+  const defaultName = showUnassignedOnly
+    ? (unassignedCount === 0 ? 'Unassigned' : 'Unassigned ' + (unassignedCount + 1))
+    : 'Area ' + (shapes.length + 1);
   shapes.push({ id, layer, color, label: defaultName });
   addLabelToLayer(layer, defaultName);
   computeZips();
@@ -565,15 +573,24 @@ map.on(L.Draw.Event.DELETED, function(e) {
 function renderZipList() {
   const wrap = document.getElementById('zipListWrap');
   const countEl = document.getElementById('zipCount');
-  countEl.textContent = zipResult.length.toLocaleString();
-  document.getElementById('copyBtn').disabled = !zipResult.length;
-  document.getElementById('csvBtn').disabled  = !zipResult.length;
 
-  if (!zipResult.length) {
+  // When Unassigned Only is on, filter to ZIPs not in any area
+  let displayZips = zipResult;
+  if (showUnassignedOnly) {
+    const assigned = new Set();
+    Object.values(shapeZips).forEach(zips => zips.forEach(z => assigned.add(z)));
+    displayZips = zipResult.filter(z => !assigned.has(z));
+  }
+
+  countEl.textContent = displayZips.length.toLocaleString() + (showUnassignedOnly ? ' unassigned' : '');
+  document.getElementById('copyBtn').disabled = !displayZips.length;
+  document.getElementById('csvBtn').disabled  = !displayZips.length;
+
+  if (!displayZips.length) {
     if (!shapes.length) {
       wrap.innerHTML = `<div class="zip-placeholder"><span class="icon">✏️</span>Use the draw tools on the map to select an area.<br><br><strong>Polygon</strong> — draw any shape<br><strong>Rectangle</strong> — drag a box<br><strong>Circle</strong> — radius from a center point</div>`;
     } else {
-      wrap.innerHTML = `<div class="zip-placeholder"><span class="icon">🔍</span>No ZIP codes found in the drawn area.</div>`;
+      wrap.innerHTML = `<div class="zip-placeholder"><span class="icon">🔍</span>${showUnassignedOnly ? 'All ZIPs in this area are already assigned.' : 'No ZIP codes found in the drawn area.'}</div>`;
     }
     return;
   }
@@ -582,7 +599,7 @@ function renderZipList() {
   const zipInfo = {};
   for (const [zip,,, city, state] of zipData) zipInfo[zip] = city + ', ' + state;
 
-  wrap.innerHTML = zipResult.map(z =>
+  wrap.innerHTML = displayZips.map(z =>
     `<span class="zip-chip" title="${zipInfo[z]||''}">${z}</span>`
   ).join('');
 }
@@ -809,6 +826,24 @@ document.querySelectorAll('.ptab').forEach(tab => {
     document.getElementById('tabProjects').style.display = activeTab === 'projects' ? 'flex' : 'none';
     if (activeTab === 'projects') loadProjects();
   });
+});
+
+// ── Unassigned Only toggle ─────────────────────────────────────────────────
+document.getElementById('unassignedBtn').addEventListener('click', () => {
+  showUnassignedOnly = !showUnassignedOnly;
+  const btn = document.getElementById('unassignedBtn');
+  if (showUnassignedOnly) {
+    btn.style.background = '#1F3864';
+    btn.style.color = '#fff';
+    btn.style.borderColor = '#1F3864';
+    btn.textContent = '✅ Unassigned Only';
+  } else {
+    btn.style.background = '#f0f0f0';
+    btn.style.color = '#555';
+    btn.style.borderColor = '#ccc';
+    btn.textContent = '⬜ Unassigned Only';
+  }
+  renderZipList();
 });
 
 // ── Copy / Export ──────────────────────────────────────────────────────────
