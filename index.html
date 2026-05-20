@@ -383,6 +383,7 @@ let pendingNameCb = null;
 let showAllMode       = true;
 let focusedShapeIds   = new Set(); // supports multi-select
 let showUnassignedOnly = false;    // COMMENTED OUT — pending UX review
+let zipAltData = {};               // { zip: [[altCarrier, altTerminal], ...] } — populated on Service Area import
 
 // ── Map init ──────────────────────────────────────────────────────────────
 const map = L.map('map', { center: [39.5, -98.35], zoom: 5 });
@@ -966,8 +967,15 @@ document.getElementById('csvBtn').addEventListener('click', () => {
         const entry = zipLookup.get(z);
         const city  = entry ? entry[3] : '';
         const state = entry ? entry[4] : '';
-        dataRows.push(['US', z, z, city, state, s.carrier||'', s.label, '0','0',
-          '','','','','','','','','','','','','','','','']);
+        const alts = zipAltData[z] || [];
+        const altFields = ['','','','','','','','','','','','','','','',''];
+        alts.slice(0,4).forEach(([ac,at], i) => {
+          altFields[i*4]   = ac;
+          altFields[i*4+1] = at;
+          altFields[i*4+2] = '0';
+          altFields[i*4+3] = '0';
+        });
+        dataRows.push(['US', z, z, city, state, s.carrier||'', s.label, '0','0', ...altFields]);
       });
     });
     rowCount = dataRows.length;
@@ -1422,6 +1430,7 @@ function processImportedCSV(text, filename) {
   shapes = [];
   shapeZips = {};
   zipResult = [];
+  zipAltData = {};
   showAllMode = true;
   focusedShapeIds.clear();
 
@@ -1605,11 +1614,15 @@ function processServiceAreaCSV(text, filename) {
     const zips = expandZips(fromZip, toZip, state);
     if (!zips.length) continue;
     addToGroup(carrier, terminal, zips);
-    // Alt carriers get the same ZIPs
+    // Alt carriers get the same ZIPs; also record alt data for export
+    const alts = [];
     for (const [ci, ti] of altCols) {
       const ac = cols[ci] ? cols[ci].trim() : '';
       const at = cols[ti] ? cols[ti].trim() : '';
-      if (ac && at) addToGroup(ac, at, zips);
+      if (ac && at) { addToGroup(ac, at, zips); alts.push([ac, at]); }
+    }
+    if (alts.length) {
+      zips.forEach(z => { zipAltData[z] = alts; });
     }
   }
 
@@ -1624,6 +1637,7 @@ function processServiceAreaCSV(text, filename) {
   shapes = [];
   shapeZips = {};
   zipResult = [];
+  zipAltData = {};
   showAllMode = true;
   focusedShapeIds.clear();
 
