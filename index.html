@@ -620,14 +620,12 @@ function focusArea(id) {
   }
   focusedShapeId = id;
 
-  // Show/hide layers
+  // Show/hide layers (including extra cluster layers)
   shapes.forEach(s => {
     const visible = s.id === id;
-    if (s.layer.setStyle) {
-      s.layer.setStyle(visible
-        ? { opacity: 1, fillOpacity: 0.2 }
-        : { opacity: 0, fillOpacity: 0 });
-    }
+    const style = visible ? { opacity: 1, fillOpacity: 0.2 } : { opacity: 0, fillOpacity: 0 };
+    if (s.layer.setStyle) s.layer.setStyle(style);
+    (s.extraLayers || []).forEach(l => { if (l.setStyle) l.setStyle(style); });
   });
 
   // Hide conflict markers in focus mode
@@ -639,8 +637,11 @@ function focusArea(id) {
     const zips = (shapeZips[id] || []);
     zipResult = zips.slice().sort();
     renderZipList();
-    // Zoom to this area
-    try { map.fitBounds(s.layer.getBounds(), { padding: [40, 40] }); } catch(e) {}
+    // Zoom to this area (fit all cluster layers)
+    try {
+      const allLayers = [s.layer, ...(s.extraLayers || [])];
+      map.fitBounds(L.featureGroup(allLayers).getBounds(), { padding: [40, 40] });
+    } catch(e) {}
   }
 
   renderShapesBar();
@@ -651,9 +652,10 @@ function setShowAll(val) {
   showAllMode = val;
   focusedShapeId = null;
 
-  // Restore all layers
+  // Restore all layers (including extra cluster layers)
   shapes.forEach(s => {
     if (s.layer.setStyle) s.layer.setStyle({ opacity: 1, fillOpacity: 0.15 });
+    (s.extraLayers || []).forEach(l => { if (l.setStyle) l.setStyle({ opacity: 1, fillOpacity: 0.15 }); });
   });
 
   // Restore conflict markers
@@ -724,7 +726,13 @@ document.getElementById('zipEditCancel').addEventListener('click', () => {
 function removeShape(id, e) {
   e.stopPropagation();
   const s = shapes.find(x => x.id === id);
-  if (s) { drawnItems.removeLayer(s.layer); shapes = shapes.filter(x => x.id !== id); }
+  if (s) {
+    drawnItems.removeLayer(s.layer);
+    (s.extraLayers || []).forEach(l => drawnItems.removeLayer(l));
+    shapes = shapes.filter(x => x.id !== id);
+    delete shapeZips[id];
+  }
+  if (showAllMode === false && focusedShapeId === id) setShowAll(true);
   renderShapesBar();
   computeZips();
   if (!shapes.length) document.getElementById('saveBtn').disabled = true;
@@ -1200,24 +1208,31 @@ function processImportedCSV(text, filename) {
       }
     }
 
-    if (points.length < 3) continue; // can't hull < 3 points
+    if (points.length < 2) continue;
 
-    // Compute convex hull for visual display
-    let layer;
-    try {
-      const hull = turf.convex(turf.featureCollection(points));
-      if (!hull) continue;
-      const coords = hull.geometry.coordinates[0].map(([lng, lat]) => [lat, lng]);
-      const color = SHAPE_COLORS[i % SHAPE_COLORS.length];
-      layer = L.polygon(coords, { color, fillColor: color, weight: 2, fillOpacity: 0.12 });
-    } catch(e) { continue; }
-
-    drawnItems.addLayer(layer);
-    const id = Date.now() + i;
-    layer._shapeId = id;
+    // Split into geographic clusters (handles Hawaii+mainland, etc.)
+    const clusters = clusterByDistance(points, 500);
     const color = SHAPE_COLORS[i % SHAPE_COLORS.length];
-    shapes.push({ id, layer, color, label: areaName, imported: true });
-    addLabelToLayer(layer, areaName);
+    const id = Date.now() + i;
+    let mainLayer = null;
+    const extraLayers = [];
+
+    clusters.forEach((clusterPts, ci) => {
+      if (clusterPts.length < 2) return;
+      try {
+        const hull = turf.convex(turf.featureCollection(clusterPts));
+        if (!hull) return;
+        const coords = hull.geometry.coordinates[0].map(([lng, lat]) => [lat, lng]);
+        const l = L.polygon(coords, { color, fillColor: color, weight: 2, fillOpacity: 0.12 });
+        drawnItems.addLayer(l);
+        addLabelToLayer(l, areaName);
+        if (!mainLayer) { l._shapeId = id; mainLayer = l; }
+        else { extraLayers.push(l); }
+      } catch(e) {}
+    });
+
+    if (!mainLayer) continue;
+    shapes.push({ id, layer: mainLayer, extraLayers, color, label: areaName, imported: true });
     shapeZips[id] = foundZips.sort();
     imported++;
   }
@@ -1236,6 +1251,35 @@ function processImportedCSV(text, filename) {
   document.getElementById('projectNameInput').value = pName;
   toast(`✓ Imported ${imported} areas · ${zipResult.length.toLocaleString()} total ZIPs`);
   setStatus(`✓ Imported ${imported} areas from CSV · ${zipResult.length.toLocaleString()} ZIPs`, 'ok');
+}
+
+// ── Geographic clustering (splits disconnected ZIP groups into separate hulls) ─
+function clusterByDistance(points, maxDistKm = 500) {
+  if (points.length < 2) return [points];
+  try {
+    const fc = turf.featureCollection(points);
+    const clustered = turf.clustersDbscan(fc, maxDistKm, { units: 'kilometers', minPoints: 2 });
+    const clusterMap = {};
+    const noise = [];
+    clustered.features.forEach(f => {
+      if (f.properties.dbscan === 'noise') { noise.push(f); return; }
+      const cid = f.properties.cluster;
+      if (!clusterMap[cid]) clusterMap[cid] = [];
+      clusterMap[cid].push(f);
+    });
+    const clusters = Object.values(clusterMap);
+    // Assign noise points to nearest cluster (or their own if no clusters)
+    noise.forEach(np => {
+      if (!clusters.length) { clusters.push([np]); return; }
+      let minDist = Infinity, nearest = clusters[0];
+      clusters.forEach(cl => cl.forEach(cp => {
+        const d = turf.distance(np, cp, { units: 'kilometers' });
+        if (d < minDist) { minDist = d; nearest = cl; }
+      }));
+      nearest.push(np);
+    });
+    return clusters.length ? clusters : [points];
+  } catch(e) { return [points]; }
 }
 
 function parseCSVLine(line) {
