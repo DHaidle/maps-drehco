@@ -240,55 +240,15 @@ Service Area                        ← title row
 
 ---
 
-## ⚠️ NEXT SESSION — TOP PRIORITY: Fix Service Area Export Alt Carriers
+## ✅ COMPLETED THIS SESSION: Fix Service Area Export Alt Carriers
 
-**Problem:** When a Service Area CSV with Alt carrier columns is imported, the export writes empty strings for all Alt cols. The original Alt carrier data is lost.
+**Status: DONE and deployed.**
 
-**Example:** Original import row:
-```
-"US","20601","20601","Waldorf","MD","carrier test","TLS375","0","0","Glen Raven","GRT","0","0","","","","","","","","","","","",""
-```
-Current export output:
-```
-"US","20601","20601","Waldorf","MD","carrier test","TLS375","0","0","","","","","","","","","","","","","","","",""
-```
-Desired export output: same as original (Alt cols preserved).
+**Root cause found:** `processServiceAreaCSV` populated `zipAltData` during the row-parsing loop, but then the confirm-dialog + clear-state block ran `zipAltData = {}` AFTER the loop, wiping all the captured data.
 
-**Root cause:** `processServiceAreaCSV` reads the Alt cols and creates separate shapes for each alt carrier, but does NOT store the original row's alt col data anywhere. The export reconstructs rows from shapes only, so it has no way to know what alt carriers were associated with each ZIP.
+**Fix:** Used a local variable `localAltData` during parsing, then assigned `zipAltData = localAltData` after the reset block. Alt carrier cols now export correctly.
 
-**Fix approach:**
-Add a new global: `let zipAltData = {};`
-Structure: `{ zip: [ [altCarrier1, altTerminal1], [altCarrier2, altTerminal2], ... ] }`
-
-During import, for each row that has alt cols:
-```javascript
-// after expanding zips from the row
-const alts = [];
-for (const [ci, ti] of altCols) {
-  const ac = cols[ci]?.trim(); const at = cols[ti]?.trim();
-  if (ac && at) alts.push([ac, at]);
-}
-if (alts.length) {
-  zips.forEach(z => { zipAltData[z] = alts; });
-}
-```
-
-During export, for each ZIP row, look up `zipAltData[z]` and populate Alt cols:
-```javascript
-const alts = zipAltData[z] || [];
-const altFields = ['','','','','','','','','','','','','','','',''];  // 16 empty slots
-alts.slice(0,4).forEach(([ac,at], i) => {
-  altFields[i*4]   = ac;   // Carrier AltN
-  altFields[i*4+1] = at;   // From/To Point AltN
-  altFields[i*4+2] = '0';  // Days In AltN
-  altFields[i*4+3] = '0';  // Days Out AltN
-});
-dataRows.push(['US', z, z, city, state, s.carrier||'', s.label, '0','0', ...altFields]);
-```
-
-Also clear `zipAltData = {}` at the top of both import functions alongside the other clears.
-
-**Files to edit:** `index.html` — `processServiceAreaCSV` and the `csvBtn` click handler.
+**Global added:** `let zipAltData = {};` — `{ zip: [[altCarrier, altTerminal], ...] }` — populated on Service Area import, read back on export. Cleared to `{}` on Area/Route import.
 
 ---
 
@@ -327,7 +287,10 @@ Sort options: A–Z (default) | NE → SW (geographic, by centroid lat-lng).
 
 | Issue | Status |
 |---|---|
-| Export Alt carrier cols empty | **NEXT PRIORITY** — see fix approach above |
+| Export Alt carrier cols empty | ✅ Fixed — `localAltData` bug resolved |
+| Conflict dots showing in show-all mode | ✅ Fixed — `renderConflictMarkers` respects `showAllMode`; import resets focus state |
+| Terminal color separation too narrow | ✅ Fixed — wider lightness spread + saturation variation (`minL-32` to `maxL+38`, min 50 units) |
+| **Manual Service Area creation** | **NEXT PRIORITY** — see below |
 | Unassigned Only feature | Commented out — needs UX rethink |
 | Local save (localStorage) | User asked to pause — not built |
 | ZCTA exact boundaries (PostGIS) | Deferred — requires server-side tile queries |
@@ -335,6 +298,30 @@ Sort options: A–Z (default) | NE → SW (geographic, by centroid lat-lng).
 | Radius display while drawing circle | Future idea |
 | Search/jump to city or ZIP | Future idea |
 | Share project via URL token | Future idea |
+
+---
+
+## ⚠️ NEXT SESSION — TOP PRIORITY: Manual Service Area Creation
+
+**Context:** New customers who don't yet have a TLS export CSV need a way to start a Service Area map from scratch. Carrier and terminal names come from TLS, so they can't be arbitrary.
+
+**Agreed UX:**
+- A popup/modal appears when the user wants to create a new Service Area manually
+- Message: *"Service Area maps are best started from a TLS import. To begin manually, enter a carrier, terminal, and at least one ZIP code."*
+- Fields: **Carrier name**, **Terminal name**, **ZIP code(s)**
+- Buttons: **Create** (requires all three + at least one valid ZIP) | **Start** (skips setup, draws freely in Area/Route style)
+- On **Create**: bootstraps the same carrier→terminal structure as an import — colored chip in sidebar, convex hull on map, exportable in Service Area format
+
+**Where the trigger lives:** TBD — options are:
+1. A **"New Service Area"** button next to the Service Area Import button
+2. Clicking Service Area Import → if no file selected → show this modal
+3. A dropdown on the import button
+
+**Implementation approach:**
+- Modal HTML added to `index.html`
+- On submit: runs same shape-building logic as the tail of `processServiceAreaCSV` — creates one carrier, one terminal, assigns ZIPs, draws convex hull, sets `zipAltData`
+- Alt 1–4 fields: optional, expandable (+ button adds another row)
+- Validation: carrier + terminal required, at least 1 ZIP must exist in `zipData`
 
 ---
 
