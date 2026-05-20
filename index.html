@@ -156,6 +156,8 @@ body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:colum
     <label>Project:</label>
     <input id="projectNameInput" type="text" placeholder="Untitled project" maxlength="80"/>
     <button class="btn btn-orange" id="saveBtn" disabled>💾 Save Project</button>
+    <button class="btn btn-ghost btn-sm" id="importBtn">📂 Import CSV</button>
+    <input type="file" id="importFile" accept=".csv,.CSV" style="display:none"/>
     <button class="btn btn-ghost btn-sm" id="clearBtn">🗑 Clear</button>
   </div>
 </div>
@@ -750,6 +752,145 @@ function formatDate(iso) {
   if (!iso) return '';
   try { return new Date(iso).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }); }
   catch(e) { return iso.slice(0,10); }
+}
+
+// ── CSV Import ────────────────────────────────────────────────────────────
+document.getElementById('importBtn').addEventListener('click', () => {
+  document.getElementById('importFile').value = '';
+  document.getElementById('importFile').click();
+});
+
+document.getElementById('importFile').addEventListener('change', function() {
+  const file = this.files[0];
+  if (!file) return;
+  if (!zipData.length) { toast('⚠ ZIP data still loading — please wait'); return; }
+  const reader = new FileReader();
+  reader.onload = e => processImportedCSV(e.target.result, file.name);
+  reader.readAsText(file);
+});
+
+function processImportedCSV(text, filename) {
+  // Parse CSV — supports two formats:
+  // Format A (this file): row 1 = title, row 2 = headers, data from row 3
+  //   columns: Start Postal Code, End Postal Code, Area/Route, ...
+  // Format B (our export): headers on row 1
+  //   columns: Area Name, ZIP Code, City, State
+
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) { toast('⚠ CSV appears empty'); return; }
+
+  // Build ZIP lookup for fast access
+  const zipLookup = new Map(zipData.map(z => [z[0], z]));
+
+  // Detect format
+  const firstLine = lines[0].replace(/"/g,'').toLowerCase();
+  const secondLine = lines[1].replace(/"/g,'').toLowerCase();
+  let groups = {};
+
+  if (secondLine.includes('start postal') || secondLine.includes('area/route') || secondLine.includes('area')) {
+    // Format A: TLS route export (title on row 1, headers on row 2)
+    for (let i = 2; i < lines.length; i++) {
+      const cols = parseCSVLine(lines[i]);
+      if (cols.length < 3) continue;
+      const zip  = cols[0].trim();
+      const area = cols[2].trim();
+      if (!zip || !area || zip.length < 5) continue;
+      if (!groups[area]) groups[area] = [];
+      groups[area].push(zip);
+    }
+  } else if (firstLine.includes('area name') || firstLine.includes('zip code')) {
+    // Format B: our own export
+    for (let i = 1; i < lines.length; i++) {
+      const cols = parseCSVLine(lines[i]);
+      if (cols.length < 2) continue;
+      const area = cols[0].trim();
+      const zip  = cols[1].trim();
+      if (!zip || !area) continue;
+      if (!groups[area]) groups[area] = [];
+      groups[area].push(zip);
+    }
+  } else {
+    toast('⚠ Unrecognized CSV format');
+    return;
+  }
+
+  const areaNames = Object.keys(groups);
+  if (!areaNames.length) { toast('⚠ No areas found in CSV'); return; }
+
+  if (shapes.length > 0 && !confirm(`Clear the ${shapes.length} area(s) on the map and import ${areaNames.length} areas from "${filename}"?`)) return;
+
+  // Clear map
+  drawnItems.clearLayers();
+  shapes = [];
+  shapeZips = {};
+  zipResult = [];
+
+  let imported = 0;
+  const allFound = new Set();
+
+  for (let i = 0; i < areaNames.length; i++) {
+    const areaName = areaNames[i];
+    const areaZips = [...new Set(groups[areaName])]; // deduplicate
+
+    // Find centroids for ZIPs in this area
+    const points = [];
+    const foundZips = [];
+    for (const zip of areaZips) {
+      const entry = zipLookup.get(zip);
+      if (entry) {
+        points.push(turf.point([entry[2], entry[1]])); // [lng, lat]
+        foundZips.push(zip);
+        allFound.add(zip);
+      }
+    }
+
+    if (points.length < 3) continue; // can't hull < 3 points
+
+    // Compute convex hull for visual display
+    let layer;
+    try {
+      const hull = turf.convex(turf.featureCollection(points));
+      if (!hull) continue;
+      const coords = hull.geometry.coordinates[0].map(([lng, lat]) => [lat, lng]);
+      const color = SHAPE_COLORS[i % SHAPE_COLORS.length];
+      layer = L.polygon(coords, { color, fillColor: color, weight: 2, fillOpacity: 0.12 });
+    } catch(e) { continue; }
+
+    drawnItems.addLayer(layer);
+    const id = Date.now() + i;
+    layer._shapeId = id;
+    const color = SHAPE_COLORS[i % SHAPE_COLORS.length];
+    shapes.push({ id, layer, color, label: areaName, imported: true });
+    shapeZips[id] = foundZips.sort();
+    imported++;
+  }
+
+  zipResult = Array.from(allFound).sort();
+  document.getElementById('saveBtn').disabled = !shapes.length;
+  renderShapesBar();
+  renderZipList();
+
+  if (drawnItems.getLayers().length) {
+    try { map.fitBounds(drawnItems.getBounds(), { padding: [30, 30] }); } catch(e) {}
+  }
+
+  const pName = filename.replace(/\.[^.]+$/, '');
+  document.getElementById('projectNameInput').value = pName;
+  toast(`✓ Imported ${imported} areas · ${zipResult.length.toLocaleString()} total ZIPs`);
+  setStatus(`✓ Imported ${imported} areas from CSV · ${zipResult.length.toLocaleString()} ZIPs`, 'ok');
+}
+
+function parseCSVLine(line) {
+  // Handle quoted fields with commas inside
+  const result = [];
+  let cur = '', inQuote = false;
+  for (let c of line) {
+    if (c === '"') { inQuote = !inQuote; }
+    else if (c === ',' && !inQuote) { result.push(cur); cur = ''; }
+    else { cur += c; }
+  }
+  result.push(cur);
+  return result;
 }
 
 // ── Area name modal ────────────────────────────────────────────────────────
