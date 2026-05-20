@@ -513,22 +513,35 @@ function computeZips() {
     }
   }
 
-  zipResult = Array.from(found).sort();
-  renderZipList();
-  computeAndRenderConflicts();
-
-  // If Unassigned Only is on, show dots for unassigned ZIPs on the map
+  // If Unassigned Only is on, strip assigned ZIPs out of drawn shapes entirely
   if (showUnassignedOnly) {
     const assigned = new Set();
-    const zipLookup = new Map(zipData.map(z => [z[0], z]));
     shapes.forEach(s => {
       if (s.imported) (shapeZips[s.id] || []).forEach(z => assigned.add(z));
     });
+    shapes.forEach(s => {
+      if (!s.imported) {
+        shapeZips[s.id] = (shapeZips[s.id] || []).filter(z => !assigned.has(z));
+      }
+    });
+    // Recompute zipResult from cleaned-up shapeZips
+    const cleaned = new Set();
+    Object.values(shapeZips).forEach(zips => zips.forEach(z => cleaned.add(z)));
+    zipResult = Array.from(cleaned).sort();
+  } else {
+    zipResult = Array.from(found).sort();
+  }
+
+  renderZipList();
+  computeAndRenderConflicts();
+
+  // If Unassigned Only is on, show only gap ZIP dots on the map
+  if (showUnassignedOnly) {
+    const zipLookup = new Map(zipData.map(z => [z[0], z]));
     focusDotLayer.clearLayers();
     shapes.forEach(s => {
       if (!s.imported) {
         (shapeZips[s.id] || []).forEach(zip => {
-          if (assigned.has(zip)) return; // skip assigned ZIPs
           const entry = zipLookup.get(zip);
           if (!entry) return;
           L.circleMarker([entry[1], entry[2]], {
