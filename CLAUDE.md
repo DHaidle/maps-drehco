@@ -7,7 +7,11 @@
 ## What This Is
 
 A single-page map tool for drawing territory shapes and generating ZIP code lists.
-Draw a polygon, rectangle, or circle on the map → instantly see every US ZIP code whose centroid falls inside → export as CSV or save the project to Supabase.
+Draw a polygon, rectangle, or circle → instantly see every US ZIP code whose centroid falls inside → export as CSV or save to Supabase.
+
+**Also supports importing carrier service area files** (two formats):
+- **Area/Route Import** — simple zone assignments (Start Postal Code, End Postal Code, Area/Route)
+- **Service Area Import** — carrier → terminal hierarchy with ZIP ranges and Alt carrier columns
 
 ---
 
@@ -35,18 +39,15 @@ git push origin main
 
 | Variable | Purpose |
 |---|---|
-| `SUPABASE_URL` | Supabase project URL (same project as Happy Path, or new one) |
-| `SUPABASE_SERVICE_KEY` | Supabase service role key — used server-side in api/projects.js |
+| `SUPABASE_URL` | Supabase project URL |
+| `SUPABASE_SERVICE_KEY` | Service role key — used server-side in api/projects.js only |
 
-The **front-end** uses NO Supabase credentials directly — all DB access goes through the `/api/projects` endpoint.
+The front-end uses NO Supabase credentials directly — all DB access goes through `/api/projects`.
 
 ---
 
 ## Database — Supabase
 
-Uses the same Supabase project as Happy Path (or create a new one — your choice).
-
-### Create the table (run once in Supabase SQL editor)
 ```sql
 CREATE TABLE map_projects (
   id          uuid      PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -67,72 +68,282 @@ CREATE TABLE map_projects (
 |---|---|
 | `index.html` | Entire front-end — Leaflet map, draw tools, ZIP panel, project management |
 | `api/projects.js` | Vercel serverless function — CRUD for map_projects in Supabase |
-| `data/zip_centroids.json` | 41,898 US ZIP centroids `[zip, lat, lng, city, state]` — served as static file |
-| `package.json` | Minimal Node config |
+| `data/zip_centroids.json` | 41,898 US ZIP centroids `[zip, lat, lng, city, state]` — 1.74MB static |
+| `package.json` | `"node": "24.x"` |
 | `vercel.json` | Cache headers for zip data, API routing |
 | `CLAUDE.md` | This file |
 
 ---
 
-## ZIP Data
+## Architecture
 
-Source: `zipcodes` Python package (derived from USPS/Census data, public domain).
-Format: JSON array of `[zip_code, lat, lng, city, state]`, 1.74MB.
+- ZIP lookup is **client-side** using Turf.js `booleanPointInPolygon`
+- ZIP data fetched once on load from `/data/zip_centroids.json`
+- Projects saved to Supabase via `/api/projects`
+- Multiple shapes per project — ZIP union computed across all shapes
+- Circle shapes stored as `{type:'Circle', center, radius}` and reconstructed on load
+- Geographic clustering uses **manual union-find with haversine distance** (no turf.clustersDbscan — not in CDN build)
+- Convex hulls per geographic cluster — same color, same name, stored in `extraLayers[]` on the shape object
 
-To regenerate:
-```bash
-pip install zipcodes
-python3 -c "
-import zipcodes, json
-data = [[z['zip_code'], round(float(z['lat']),4), round(float(z['long']),4), z['city'], z['state']]
-        for z in zipcodes.list_all() if float(z['lat']) != 0]
-with open('data/zip_centroids.json','w') as f: json.dump(data, f, separators=(',',':'))
-print(len(data), 'ZIPs written')
-"
+---
+
+## Key State Variables
+
+```javascript
+let zipData   = [];          // [[zip, lat, lng, city, state], ...]
+let shapes    = [];          // see Shape Object below
+let shapeZips = {};          // { shapeId: [zip, ...] }
+let zipResult = [];          // current visible ZIP list
+let activeTab = 'zips';
+let shapeSort = 'alpha';     // 'alpha' | 'geo' (NE→SW)
+let currentProjectId = null;
+let showAllMode    = true;
+let focusedShapeIds = new Set();
+let showUnassignedOnly = false;  // COMMENTED OUT — pending UX review
+```
+
+### Shape Object
+```javascript
+{
+  id,           // unique string
+  layer,        // Leaflet layer (the draw shape or hull polygon)
+  extraLayers,  // [] — additional hull polygons for same shape (geographic clusters)
+  color,        // terminal shade hex (e.g. '#3A6EA5')
+  carrierColor, // carrier base hex (e.g. '#2E75B6')
+  label,        // terminal name (e.g. 'JKSI (Jackson Trucking)')
+  carrier,      // carrier name (e.g. 'Jackson Trucking Company INC') — null for drawn shapes
+  imported,     // true for imported shapes
+}
 ```
 
 ---
 
-## Architecture Notes
+## Layer Groups
 
-- ZIP lookup is entirely **client-side** using Turf.js `booleanPointInPolygon`
-- ZIP data is fetched once on page load from `/data/zip_centroids.json` (Vercel static)
-- Projects (shapes + ZIP lists) are saved to Supabase via `/api/projects`
-- Multiple shapes per project are supported — ZIP union is computed across all shapes
-- Circle shapes are stored as `{type:'Circle', center, radius}` and reconstructed on load
-
----
-
-## How to Use
-
-1. Draw a shape (polygon / rectangle / circle) using the toolbar on the left of the map
-2. ZIP codes appear instantly in the right panel
-3. Add more shapes to the same project — ZIPs update automatically
-4. Give the project a name in the header, click **Save Project**
-5. Switch to **Projects** tab to reload, download, or delete saved projects
-6. Click **Export CSV** to download a CSV with ZIP, City, State columns
+```javascript
+const focusDotLayer      = L.layerGroup().addTo(map);  // ZIP centroid dots when focused
+const conflictMarkerLayer = L.layerGroup().addTo(map); // red conflict dots (hidden in show-all)
+```
 
 ---
 
-## NEXT SESSION / Future Ideas
+## Colors
 
-- Show ZIP count per shape (not just total)
-- Radius display when drawing circles (e.g. "50 miles from Chicago")
-- Search/jump to a city or ZIP on the map
-- Upgrade to ZCTA boundary polygons (PostGIS in Supabase) for exact edge accuracy
-- Share a project via URL (public read link with token)
-- Color each shape's ZIPs differently in the list
+```javascript
+const SHAPE_COLORS = ['#2E75B6','#ED7D31','#375623','#C00000','#7030A0','#00B0F0','#FF6600'];
+// One color per carrier. Terminals within a carrier get HSL lightness shades of that color.
+
+function generateShades(baseHex, n)  // returns n hex colors ranging from darker to lighter
+function hexToHsl(hex)               // hex → [h, s, l]
+function hslToHex(h, s, l)          // [h, s, l] → hex
+```
 
 ---
 
-## Setup Checklist (first deploy)
+## Import — Service Area Format
 
-- [ ] Create local folder: `/Users/david/TLS Route with Driver Pay/maps-drehco/`
-- [ ] Copy files into folder
-- [ ] `git init`, commit, push to new GitHub repo `DHaidle/maps-drehco`
-- [ ] Connect repo to new Vercel project
-- [ ] Add `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` env vars in Vercel
-- [ ] Run `CREATE TABLE map_projects...` SQL in Supabase
-- [ ] Add custom domain `maps.drehco.com` in Vercel
-- [ ] Update DNS at your domain registrar (CNAME → cname.vercel-dns.com)
-- [ ] Update `SUPABASE_URL` and `SUPABASE_KEY` constants in `index.html` (front-end display only — not sensitive since all real DB calls go through the API)
+**File structure:**
+- Row 1: `"Service Area"` (title)
+- Row 2: headers
+- Row 3+: data
+
+**Columns (0-indexed):**
+```
+0:Country  1:From Zip  2:To Zip  3:City  4:State
+5:Carrier  6:From/To Point (= terminal name)  7:Days In  8:Days Out
+9:Carrier Alt1  10:From/To Point Alt1  11:Days In Alt1  12:Days Out Alt1
+13:Carrier Alt2  14:From/To Point Alt2  ... (up to Alt4, cols 21-24)
+25:Added By  26:Added On  27:Modified By  28:Modified On  (ignored on import)
+```
+
+**How `processServiceAreaCSV` works:**
+1. Builds `carrierGroups`: `{ carrierName: { terminals: {termName: Set<zip>}, terminalOrder: [] } }`
+2. `expandZips(fromZip, toZip, state)` — handles individual ZIP, ZIP range (string compare), or state-level (all centroids for that state)
+3. Alt cols `[[9,10],[13,14],[17,18],[21,22]]` — same ZIPs added to each non-empty alt carrier/terminal
+4. One `SHAPE_COLORS` color per carrier; `generateShades(carrierColor, n)` for n terminals
+5. Each terminal → one shape with `{ carrier, label: termName, color: shade, carrierColor, imported: true }`
+6. Convex hull computed per terminal's ZIP cluster (union-find clustering, max 500km distance)
+
+---
+
+## Import — Area/Route Format
+
+**Columns:** `Start Postal Code`, `End Postal Code`, `Area/Route`
+- Row 1 may be a title row (detected if row doesn't look like a header/data row)
+- ZIPs are treated as individual (From = To), or range if From ≠ To
+
+---
+
+## Display Modes
+
+### Show All (default)
+- All hull polygons visible (`opacity:1, fillOpacity:0.15`)
+- No dots of any kind
+- Conflict markers hidden (list in panel is sufficient)
+
+### Focus Mode (carrier or terminal clicked)
+- All hulls hidden (`opacity:0, fillOpacity:0`)
+- ZIP centroid dots shown in `focusDotLayer` — colored per terminal
+- Multiple terminals can be selected simultaneously (toggle click)
+- Clicking carrier header selects/deselects all its terminals
+
+### Key functions
+```javascript
+focusArea(id)           // toggle single terminal; renders dots for all selected
+focusCarrier(name)      // toggle all terminals under a carrier
+setShowAll(val)         // restore hull view, clear dots, reset focus state
+```
+
+**IMPORTANT:** On import, both import functions now explicitly call:
+```javascript
+focusDotLayer.clearLayers();
+conflictMarkerLayer.clearLayers();
+showAllMode = true;
+focusedShapeIds.clear();
+```
+This prevents stale dots from a previous focus session persisting after a new import.
+
+**IMPORTANT:** `renderConflictMarkers()` respects `showAllMode` when creating markers:
+```javascript
+const visible = !showAllMode;
+// markers created with opacity:0 when in show-all mode
+```
+
+---
+
+## Conflict Detection
+
+- A ZIP assigned to 2+ terminals is a **conflict**
+- `conflictData = { zip: [shapeId, shapeId, ...] }` — built by `computeAndRenderConflicts()`
+- Shown as red dot markers on map **only in focus mode**
+- In show-all mode: conflict count + ZIP list shown in panel only (no map dots)
+- Right-click (or click) a conflict marker → context menu to reassign the ZIP
+
+---
+
+## Export
+
+### Service Area export (when imported shapes exist)
+**Current behavior:** outputs individual ZIP rows with empty Alt columns — **THIS IS THE NEXT BUG TO FIX** (see below)
+
+```
+Service Area                        ← title row
+"Country","From Zip","To Zip",...   ← full header with all Alt cols
+"US","20601","20601","Waldorf","MD","Carrier","Terminal","0","0","","","","",...
+```
+
+### Area/Route export (drawn shapes)
+```
+"Start Postal Code","End Postal Code","Area/Route"
+"20601","20601","My Area"
+```
+
+---
+
+## ⚠️ NEXT SESSION — TOP PRIORITY: Fix Service Area Export Alt Carriers
+
+**Problem:** When a Service Area CSV with Alt carrier columns is imported, the export writes empty strings for all Alt cols. The original Alt carrier data is lost.
+
+**Example:** Original import row:
+```
+"US","20601","20601","Waldorf","MD","carrier test","TLS375","0","0","Glen Raven","GRT","0","0","","","","","","","","","","","",""
+```
+Current export output:
+```
+"US","20601","20601","Waldorf","MD","carrier test","TLS375","0","0","","","","","","","","","","","","","","","",""
+```
+Desired export output: same as original (Alt cols preserved).
+
+**Root cause:** `processServiceAreaCSV` reads the Alt cols and creates separate shapes for each alt carrier, but does NOT store the original row's alt col data anywhere. The export reconstructs rows from shapes only, so it has no way to know what alt carriers were associated with each ZIP.
+
+**Fix approach:**
+Add a new global: `let zipAltData = {};`
+Structure: `{ zip: [ [altCarrier1, altTerminal1], [altCarrier2, altTerminal2], ... ] }`
+
+During import, for each row that has alt cols:
+```javascript
+// after expanding zips from the row
+const alts = [];
+for (const [ci, ti] of altCols) {
+  const ac = cols[ci]?.trim(); const at = cols[ti]?.trim();
+  if (ac && at) alts.push([ac, at]);
+}
+if (alts.length) {
+  zips.forEach(z => { zipAltData[z] = alts; });
+}
+```
+
+During export, for each ZIP row, look up `zipAltData[z]` and populate Alt cols:
+```javascript
+const alts = zipAltData[z] || [];
+const altFields = ['','','','','','','','','','','','','','','',''];  // 16 empty slots
+alts.slice(0,4).forEach(([ac,at], i) => {
+  altFields[i*4]   = ac;   // Carrier AltN
+  altFields[i*4+1] = at;   // From/To Point AltN
+  altFields[i*4+2] = '0';  // Days In AltN
+  altFields[i*4+3] = '0';  // Days Out AltN
+});
+dataRows.push(['US', z, z, city, state, s.carrier||'', s.label, '0','0', ...altFields]);
+```
+
+Also clear `zipAltData = {}` at the top of both import functions alongside the other clears.
+
+**Files to edit:** `index.html` — `processServiceAreaCSV` and the `csvBtn` click handler.
+
+---
+
+## Geographic Clustering (convex hull)
+
+```javascript
+function clusterByDistance(points, maxDistKm = 500)
+// Union-find: groups [lat,lng] points where any two in a group are within maxDistKm
+// Returns array of arrays (clusters)
+// Used to split geographically distant ZIP groups into separate hull polygons
+// Fixes the "Hawaii triangle" problem where distant ZIPs produced a single giant polygon
+```
+
+Fallbacks:
+- 1 point → `L.circleMarker` (small dot)
+- 2 points → `L.polyline`
+- 3+ points → `turf.convex()` → `L.polygon`
+
+---
+
+## Shapes Bar Rendering
+
+In carrier mode (any shape has `.carrier`), the bar renders:
+```
+● Carrier Name (N terminals)          ← carrier-header, clickable, calls focusCarrier()
+    [Terminal Chip (459) ×]           ← terminal-chip (margin-left:12px), calls focusArea()
+```
+
+In flat mode (drawn shapes), renders plain chips.
+
+Sort options: A–Z (default) | NE → SW (geographic, by centroid lat-lng).
+
+---
+
+## Known Issues / Deferred
+
+| Issue | Status |
+|---|---|
+| Export Alt carrier cols empty | **NEXT PRIORITY** — see fix approach above |
+| Unassigned Only feature | Commented out — needs UX rethink |
+| Local save (localStorage) | User asked to pause — not built |
+| ZCTA exact boundaries (PostGIS) | Deferred — requires server-side tile queries |
+| ZIP count per shape in panel | Future idea |
+| Radius display while drawing circle | Future idea |
+| Search/jump to city or ZIP | Future idea |
+| Share project via URL token | Future idea |
+
+---
+
+## Setup Checklist (first deploy — already done)
+
+- [x] Create local folder: `/Users/david/TLS Route with Driver Pay/maps-drehco/`
+- [x] `git init`, commit, push to GitHub repo `DHaidle/maps-drehco`
+- [x] Connect repo to Vercel project
+- [x] Add `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` env vars in Vercel
+- [x] Run `CREATE TABLE map_projects...` SQL in Supabase
+- [x] Add custom domain `maps.drehco.com` in Vercel
+- [x] Update DNS at registrar (CNAME → cname.vercel-dns.com)
