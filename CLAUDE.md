@@ -1,5 +1,5 @@
 # ZIP Code Map Tool
-**Last updated:** May 20, 2026
+**Last updated:** May 20, 2026 (evening session)
 **Live URL:** https://maps.drehco.com
 
 ---
@@ -224,12 +224,12 @@ const visible = !showAllMode;
 ## Export
 
 ### Service Area export (when imported shapes exist)
-**Current behavior:** outputs individual ZIP rows with empty Alt columns — **THIS IS THE NEXT BUG TO FIX** (see below)
+**Current behavior:** outputs individual ZIP rows, Alt cols populated from `zipAltData`.
 
 ```
 Service Area                        ← title row
 "Country","From Zip","To Zip",...   ← full header with all Alt cols
-"US","20601","20601","Waldorf","MD","Carrier","Terminal","0","0","","","","",...
+"US","20601","20601","Waldorf","MD","Carrier","Terminal","0","0","AltCarrier","AltTerminal","0","0",...
 ```
 
 ### Area/Route export (drawn shapes)
@@ -305,22 +305,18 @@ Sort options: A–Z (default) | NE → SW (geographic, by centroid lat-lng).
 
 **Context:** New customers who don't yet have a TLS export CSV need a way to start a Service Area map from scratch. Carrier and terminal names come from TLS, so they can't be arbitrary.
 
-**Agreed UX:**
-- A popup/modal appears when the user wants to create a new Service Area manually
-- Message: *"Service Area maps are best started from a TLS import. To begin manually, enter a carrier, terminal, and at least one ZIP code."*
-- Fields: **Carrier name**, **Terminal name**, **ZIP code(s)**
-- Buttons: **Create** (requires all three + at least one valid ZIP) | **Start** (skips setup, draws freely in Area/Route style)
-- On **Create**: bootstraps the same carrier→terminal structure as an import — colored chip in sidebar, convex hull on map, exportable in Service Area format
-
-**Where the trigger lives:** TBD — options are:
-1. A **"New Service Area"** button next to the Service Area Import button
-2. Clicking Service Area Import → if no file selected → show this modal
-3. A dropdown on the import button
+**Agreed UX (fully decided):**
+- A popup/modal appears when the user clicks **Service Area Import** (the trigger lives there)
+- Modal message: *"Service Area maps must be started from an import. To begin manually, enter a carrier, terminal, and at least one ZIP code."*
+- Fields: **Carrier name**, **Terminal name**, **ZIP code(s)** (comma or newline separated)
+- Optional expandable section: **Alt 1–4** — each alt is a carrier + terminal pair, added with a "+" button
+- Buttons: **Create** (requires carrier + terminal + at least 1 valid ZIP) | **Start** (dismisses modal, lets them draw freely in Area/Route style with no pre-defined structure)
+- On **Create**: bootstraps the same carrier→terminal structure as an import — colored chip in sidebar, convex hull on map, exportable in Service Area format with alt cols
 
 **Implementation approach:**
 - Modal HTML added to `index.html`
+- Trigger: intercept the Service Area Import button click — show modal first, offer file picker as option too (or make it a separate flow)
 - On submit: runs same shape-building logic as the tail of `processServiceAreaCSV` — creates one carrier, one terminal, assigns ZIPs, draws convex hull, sets `zipAltData`
-- Alt 1–4 fields: optional, expandable (+ button adds another row)
 - Validation: carrier + terminal required, at least 1 ZIP must exist in `zipData`
 
 ---
@@ -332,5 +328,9 @@ Sort options: A–Z (default) | NE → SW (geographic, by centroid lat-lng).
 - [x] Connect repo to Vercel project
 - [x] Add `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` env vars in Vercel
 - [x] Run `CREATE TABLE map_projects...` SQL in Supabase
-- [x] Add custom domain `maps.drehco.com` in Vercel
-- [x] Update DNS at registrar (CNAME → cname.vercel-dns.com)
+- [x] Add custom domain `maps.drehco.com` in Vercel (done — shows "Invalid Configuration" until DNS is set)
+- [ ] **DNS NOT YET SET** — Add CNAME at GoDaddy:
+  - Type: CNAME
+  - Name: `maps`
+  - Value: `42e324c7dc61f28e.vercel-dns-017.com`
+  - (Use this exact value — Vercel has updated their DNS and no longer uses `cname.vercel-dns.com`)
