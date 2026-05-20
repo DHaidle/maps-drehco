@@ -1602,6 +1602,7 @@ function processServiceAreaCSV(text, filename) {
 
   // Alt carrier column pairs: [carrierColIdx, terminalColIdx]
   const altCols = [[9,10],[13,14],[17,18],[21,22]];
+  const localAltData = {}; // collect here first — global gets reset after confirm dialog
 
   for (let i = 2; i < lines.length; i++) {
     const cols = parseCSVLine(lines[i]);
@@ -1622,7 +1623,7 @@ function processServiceAreaCSV(text, filename) {
       if (ac && at) { addToGroup(ac, at, zips); alts.push([ac, at]); }
     }
     if (alts.length) {
-      zips.forEach(z => { zipAltData[z] = alts; });
+      zips.forEach(z => { localAltData[z] = alts; });
     }
   }
 
@@ -1637,7 +1638,7 @@ function processServiceAreaCSV(text, filename) {
   shapes = [];
   shapeZips = {};
   zipResult = [];
-  zipAltData = {};
+  zipAltData = localAltData; // assign after reset — not {}
   showAllMode = true;
   focusedShapeIds.clear();
 
