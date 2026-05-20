@@ -516,6 +516,35 @@ function computeZips() {
   zipResult = Array.from(found).sort();
   renderZipList();
   computeAndRenderConflicts();
+
+  // If Unassigned Only is on, show dots for unassigned ZIPs on the map
+  if (showUnassignedOnly) {
+    const assigned = new Set();
+    const zipLookup = new Map(zipData.map(z => [z[0], z]));
+    shapes.forEach(s => {
+      if (s.imported) (shapeZips[s.id] || []).forEach(z => assigned.add(z));
+    });
+    focusDotLayer.clearLayers();
+    shapes.forEach(s => {
+      if (!s.imported) {
+        (shapeZips[s.id] || []).forEach(zip => {
+          if (assigned.has(zip)) return; // skip assigned ZIPs
+          const entry = zipLookup.get(zip);
+          if (!entry) return;
+          L.circleMarker([entry[1], entry[2]], {
+            radius: 3, color: s.color, fillColor: s.color,
+            weight: 1, fillOpacity: 0.85, opacity: 1
+          }).bindTooltip(`${zip} — ${entry[3]}, ${entry[4]}`, { sticky: true }).addTo(focusDotLayer);
+        });
+      }
+    });
+    // Hide all hulls so only dots show
+    shapes.forEach(s => {
+      if (s.layer.setStyle) s.layer.setStyle({ opacity: 0, fillOpacity: 0 });
+      (s.extraLayers || []).forEach(l => { if (l.setStyle) l.setStyle({ opacity: 0, fillOpacity: 0 }); });
+    });
+  }
+
   setStatus(`✓ ${zipResult.length} ZIPs across ${shapes.length} area${shapes.length>1?'s':''}`, 'ok');
 }
 
@@ -848,12 +877,16 @@ document.getElementById('unassignedBtn').addEventListener('click', () => {
     btn.style.borderColor = '#1F3864';
     btn.textContent = '✅ Unassigned Only';
   } else {
+    // Turning off — restore hulls, clear dots
+    focusDotLayer.clearLayers();
+    setShowAll(true);
     btn.style.background = '#f0f0f0';
     btn.style.color = '#555';
     btn.style.borderColor = '#ccc';
     btn.textContent = '⬜ Unassigned Only';
   }
   renderZipList();
+  if (showUnassignedOnly) computeZips(); // redraws dots for current shapes
 });
 
 // ── Copy / Export ──────────────────────────────────────────────────────────
