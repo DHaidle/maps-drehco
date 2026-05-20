@@ -243,7 +243,9 @@ body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:colum
         <div class="zip-actions">
           <button class="btn btn-green btn-sm" id="copyBtn" disabled>📋 Copy List</button>
           <button class="btn btn-blue btn-sm" id="csvBtn" disabled>⬇ Export CSV</button>
+          <!-- UNASSIGNED ONLY — commented out pending UX review
           <button class="btn btn-sm" id="unassignedBtn" title="Show only ZIPs not yet in any area" style="background:#f0f0f0;color:#555;border:1.5px solid #ccc">⬜ Unassigned Only</button>
+          -->
         </div>
       </div>
       <!-- Shared ZIPs section -->
@@ -342,7 +344,7 @@ let currentProjectId = null;
 let pendingNameCb = null;
 let showAllMode       = true;
 let focusedShapeIds   = new Set(); // supports multi-select
-let showUnassignedOnly = false;    // filter ZIP panel to unassigned ZIPs only
+let showUnassignedOnly = false;    // COMMENTED OUT — pending UX review
 
 // ── Map init ──────────────────────────────────────────────────────────────
 const map = L.map('map', { center: [39.5, -98.35], zoom: 5 });
@@ -449,10 +451,7 @@ mapEl.addEventListener('mouseup', (e) => {
   drawnItems.addLayer(layer);
   const id = Date.now();
   layer._shapeId = id;
-  const unassignedCount = shapes.filter(s => /^Unassigned(\s\d+)?$/.test(s.label)).length;
-  const defaultName = showUnassignedOnly
-    ? (unassignedCount === 0 ? 'Unassigned' : 'Unassigned ' + (unassignedCount + 1))
-    : 'Area ' + (shapes.length + 1);
+  const defaultName = 'Area ' + (shapes.length + 1);
   shapes.push({ id, layer, color, label: defaultName });
   addLabelToLayer(layer, defaultName);
   computeZips();
@@ -513,50 +512,14 @@ function computeZips() {
     }
   }
 
-  // If Unassigned Only is on, strip assigned ZIPs out of drawn shapes entirely
-  if (showUnassignedOnly) {
-    const assigned = new Set();
-    shapes.forEach(s => {
-      if (s.imported) (shapeZips[s.id] || []).forEach(z => assigned.add(z));
-    });
-    shapes.forEach(s => {
-      if (!s.imported) {
-        shapeZips[s.id] = (shapeZips[s.id] || []).filter(z => !assigned.has(z));
-      }
-    });
-    // Recompute zipResult from cleaned-up shapeZips
-    const cleaned = new Set();
-    Object.values(shapeZips).forEach(zips => zips.forEach(z => cleaned.add(z)));
-    zipResult = Array.from(cleaned).sort();
-  } else {
-    zipResult = Array.from(found).sort();
-  }
+  zipResult = Array.from(found).sort();
 
   renderZipList();
   computeAndRenderConflicts();
 
-  // If Unassigned Only is on, show only gap ZIP dots on the map
-  if (showUnassignedOnly) {
-    const zipLookup = new Map(zipData.map(z => [z[0], z]));
-    focusDotLayer.clearLayers();
-    shapes.forEach(s => {
-      if (!s.imported) {
-        (shapeZips[s.id] || []).forEach(zip => {
-          const entry = zipLookup.get(zip);
-          if (!entry) return;
-          L.circleMarker([entry[1], entry[2]], {
-            radius: 3, color: s.color, fillColor: s.color,
-            weight: 1, fillOpacity: 0.85, opacity: 1
-          }).bindTooltip(`${zip} — ${entry[3]}, ${entry[4]}`, { sticky: true }).addTo(focusDotLayer);
-        });
-      }
-    });
-    // Hide all hulls so only dots show
-    shapes.forEach(s => {
-      if (s.layer.setStyle) s.layer.setStyle({ opacity: 0, fillOpacity: 0 });
-      (s.extraLayers || []).forEach(l => { if (l.setStyle) l.setStyle({ opacity: 0, fillOpacity: 0 }); });
-    });
-  }
+  /* UNASSIGNED ONLY — commented out pending UX review
+  if (showUnassignedOnly) { ... }
+  */
 
   setStatus(`✓ ${zipResult.length} ZIPs across ${shapes.length} area${shapes.length>1?'s':''}`, 'ok');
 }
@@ -584,10 +547,7 @@ map.on(L.Draw.Event.CREATED, function(e) {
   drawnItems.addLayer(layer);
   const id = Date.now();
   layer._shapeId = id;
-  const unassignedCount = shapes.filter(s => /^Unassigned(\s\d+)?$/.test(s.label)).length;
-  const defaultName = showUnassignedOnly
-    ? (unassignedCount === 0 ? 'Unassigned' : 'Unassigned ' + (unassignedCount + 1))
-    : 'Area ' + (shapes.length + 1);
+  const defaultName = 'Area ' + (shapes.length + 1);
   shapes.push({ id, layer, color, label: defaultName });
   addLabelToLayer(layer, defaultName);
   computeZips();
@@ -616,25 +576,9 @@ function renderZipList() {
   const wrap = document.getElementById('zipListWrap');
   const countEl = document.getElementById('zipCount');
 
-  // When Unassigned Only is on:
-  // - "assigned" = ZIPs in imported areas only
-  // - "drawn"    = ZIPs in manually drawn (non-imported) shapes
-  // - display    = drawn ZIPs that are NOT in any imported area
-  let displayZips = zipResult;
-  if (showUnassignedOnly) {
-    const assigned = new Set();
-    const drawn    = new Set();
-    shapes.forEach(s => {
-      if (s.imported) {
-        (shapeZips[s.id] || []).forEach(z => assigned.add(z));
-      } else {
-        (shapeZips[s.id] || []).forEach(z => drawn.add(z));
-      }
-    });
-    displayZips = Array.from(drawn).filter(z => !assigned.has(z)).sort();
-  }
+  const displayZips = zipResult;
 
-  countEl.textContent = displayZips.length.toLocaleString() + (showUnassignedOnly ? ' unassigned' : '');
+  countEl.textContent = displayZips.length.toLocaleString();
   document.getElementById('copyBtn').disabled = !displayZips.length;
   document.getElementById('csvBtn').disabled  = !displayZips.length;
 
@@ -642,7 +586,7 @@ function renderZipList() {
     if (!shapes.length) {
       wrap.innerHTML = `<div class="zip-placeholder"><span class="icon">✏️</span>Use the draw tools on the map to select an area.<br><br><strong>Polygon</strong> — draw any shape<br><strong>Rectangle</strong> — drag a box<br><strong>Circle</strong> — radius from a center point</div>`;
     } else {
-      wrap.innerHTML = `<div class="zip-placeholder"><span class="icon">🔍</span>${showUnassignedOnly ? 'All ZIPs in this area are already assigned.' : 'No ZIP codes found in the drawn area.'}</div>`;
+      wrap.innerHTML = `<div class="zip-placeholder"><span class="icon">🔍</span>No ZIP codes found in the drawn area.</div>`;
     }
     return;
   }
@@ -880,27 +824,9 @@ document.querySelectorAll('.ptab').forEach(tab => {
   });
 });
 
-// ── Unassigned Only toggle ─────────────────────────────────────────────────
-document.getElementById('unassignedBtn').addEventListener('click', () => {
-  showUnassignedOnly = !showUnassignedOnly;
-  const btn = document.getElementById('unassignedBtn');
-  if (showUnassignedOnly) {
-    btn.style.background = '#1F3864';
-    btn.style.color = '#fff';
-    btn.style.borderColor = '#1F3864';
-    btn.textContent = '✅ Unassigned Only';
-  } else {
-    // Turning off — restore hulls, clear dots
-    focusDotLayer.clearLayers();
-    setShowAll(true);
-    btn.style.background = '#f0f0f0';
-    btn.style.color = '#555';
-    btn.style.borderColor = '#ccc';
-    btn.textContent = '⬜ Unassigned Only';
-  }
-  renderZipList();
-  if (showUnassignedOnly) computeZips(); // redraws dots for current shapes
-});
+/* UNASSIGNED ONLY toggle — commented out pending UX review
+document.getElementById('unassignedBtn').addEventListener('click', () => { ... });
+*/
 
 // ── Copy / Export ──────────────────────────────────────────────────────────
 document.getElementById('copyBtn').addEventListener('click', () => {
@@ -1162,8 +1088,7 @@ function renderConflictPanel() {
   const badge    = document.getElementById('conflictBadge');
   const listWrap = document.getElementById('conflictListWrap');
 
-  // Hide conflict panel entirely when Unassigned Only is on (overlaps are intentional)
-  if (showUnassignedOnly) { section.style.display = 'none'; return; }
+  // UNASSIGNED ONLY conflict suppression — commented out pending UX review
 
   // When focused on one area, only show conflicts involving that area
   let entries = Object.entries(conflictData);
