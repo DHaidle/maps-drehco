@@ -339,8 +339,8 @@ let activeTab = 'zips';
 let shapeSort = 'alpha'; // 'alpha' | 'geo'
 let currentProjectId = null;
 let pendingNameCb = null;
-let showAllMode   = true;
-let focusedShapeId = null;
+let showAllMode    = true;
+let focusedShapeIds = new Set(); // supports multi-select
 
 // ── Map init ──────────────────────────────────────────────────────────────
 const map = L.map('map', { center: [39.5, -98.35], zoom: 5 });
@@ -621,8 +621,8 @@ function renderShapesBar() {
   const chips = sortedShapes().map(s => {
     const count = (shapeZips[s.id] || []).length;
     const countBadge = count ? ` (${count})` : '';
-    const isFocused = !showAllMode && focusedShapeId === s.id;
-    const isDimmed  = !showAllMode && focusedShapeId !== s.id;
+    const isFocused = !showAllMode && focusedShapeIds.has(s.id);
+    const isDimmed  = !showAllMode && !focusedShapeIds.has(s.id);
     const cls = isFocused ? ' focused' : isDimmed ? ' dimmed' : '';
     return `<span class="shape-chip${cls}" style="background:${s.color}" onclick="focusArea(${s.id})" title="Click to focus this area">
       ${esc(s.label)}${countBadge}<span class="shape-chip-edit" onclick="renameShape(${s.id},event)" title="Rename">✏</span><span class="shape-chip-edit" onclick="editShapeZips(${s.id},event)" title="Edit ZIP list">📋</span><span class="del" onclick="removeShape(${s.id},event)">✕</span>
@@ -653,11 +653,17 @@ function addLabelToLayer(layer, label) {
 
 // ── Focus / Show-All ─────────────────────────────────────────────────────
 function focusArea(id) {
-  if (showAllMode) {
-    // First click exits show-all and focuses
-    showAllMode = false;
+  // Toggle this area in/out of the selected set
+  if (focusedShapeIds.has(id)) {
+    focusedShapeIds.delete(id);
+  } else {
+    focusedShapeIds.add(id);
   }
-  focusedShapeId = id;
+
+  // If nothing selected, go back to show-all
+  if (focusedShapeIds.size === 0) { setShowAll(true); return; }
+
+  showAllMode = false;
 
   // Hide all hulls
   shapes.forEach(s => {
@@ -668,13 +674,16 @@ function focusArea(id) {
   // Hide conflict markers in focus mode
   conflictMarkerLayer.eachLayer(m => m.setStyle && m.setStyle({ opacity: 0, fillOpacity: 0 }));
 
-  // Draw ZIP dots for focused area
-  const s = shapes.find(x => x.id === id);
+  // Redraw dots for ALL selected areas
   focusDotLayer.clearLayers();
-  if (s) {
-    const zipLookup = new Map(zipData.map(z => [z[0], z]));
-    const zips = shapeZips[id] || [];
-    zips.forEach(zip => {
+  const zipLookup = new Map(zipData.map(z => [z[0], z]));
+  const unionZips = new Set();
+
+  focusedShapeIds.forEach(sid => {
+    const s = shapes.find(x => x.id === sid);
+    if (!s) return;
+    (shapeZips[sid] || []).forEach(zip => {
+      unionZips.add(zip);
       const entry = zipLookup.get(zip);
       if (!entry) return;
       L.circleMarker([entry[1], entry[2]], {
@@ -686,19 +695,20 @@ function focusArea(id) {
         opacity: 1
       }).bindTooltip(`${zip} — ${entry[3]}, ${entry[4]}`, { sticky: true }).addTo(focusDotLayer);
     });
+  });
 
-    zipResult = zips.slice().sort();
-    renderZipList();
-  }
-
+  zipResult = Array.from(unionZips).sort();
+  renderZipList();
   renderShapesBar();
   renderConflictPanel();
-  setStatus(`Focused: ${s ? s.label : ''} · ${zipResult.length.toLocaleString()} ZIPs`, 'ok');
+
+  const names = shapes.filter(s => focusedShapeIds.has(s.id)).map(s => s.label).join(', ');
+  setStatus(`Selected: ${names} · ${zipResult.length.toLocaleString()} ZIPs`, 'ok');
 }
 
 function setShowAll(val) {
   showAllMode = val;
-  focusedShapeId = null;
+  focusedShapeIds.clear();
 
   // Clear focus dots, restore all hulls
   focusDotLayer.clearLayers();
@@ -782,7 +792,8 @@ function removeShape(id, e) {
     shapes = shapes.filter(x => x.id !== id);
     delete shapeZips[id];
   }
-  if (showAllMode === false && focusedShapeId === id) setShowAll(true);
+  focusedShapeIds.delete(id);
+  if (!showAllMode && focusedShapeIds.size === 0) setShowAll(true);
   renderShapesBar();
   computeZips();
   if (!shapes.length) document.getElementById('saveBtn').disabled = true;
@@ -837,7 +848,8 @@ document.getElementById('clearBtn').addEventListener('click', () => {
   zipResult = [];
   currentProjectId = null;
   showAllMode = true;
-  focusedShapeId = null;
+  focusedShapeIds.clear();
+  focusDotLayer.clearLayers();
   conflictMarkerLayer.clearLayers();
   document.getElementById('projectNameInput').value = '';
   document.getElementById('saveBtn').disabled = true;
@@ -1061,8 +1073,8 @@ function renderConflictPanel() {
 
   // When focused on one area, only show conflicts involving that area
   let entries = Object.entries(conflictData);
-  if (!showAllMode && focusedShapeId) {
-    entries = entries.filter(([, sids]) => sids.includes(focusedShapeId));
+  if (!showAllMode && focusedShapeIds.size > 0) {
+    entries = entries.filter(([, sids]) => sids.some(sid => focusedShapeIds.has(sid)));
   }
   entries.sort((a, b) => a[0].localeCompare(b[0]));
 
