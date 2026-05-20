@@ -4,6 +4,6 @@
   "description": "ZIP code map tool — maps.drehco.com",
   "private": true,
   "engines": {
-    "node": "18.x"
+    "node": "24.x"
   }
 }
