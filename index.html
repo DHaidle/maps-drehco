@@ -574,12 +574,22 @@ function renderZipList() {
   const wrap = document.getElementById('zipListWrap');
   const countEl = document.getElementById('zipCount');
 
-  // When Unassigned Only is on, filter to ZIPs not in any area
+  // When Unassigned Only is on:
+  // - "assigned" = ZIPs in imported areas only
+  // - "drawn"    = ZIPs in manually drawn (non-imported) shapes
+  // - display    = drawn ZIPs that are NOT in any imported area
   let displayZips = zipResult;
   if (showUnassignedOnly) {
     const assigned = new Set();
-    Object.values(shapeZips).forEach(zips => zips.forEach(z => assigned.add(z)));
-    displayZips = zipResult.filter(z => !assigned.has(z));
+    const drawn    = new Set();
+    shapes.forEach(s => {
+      if (s.imported) {
+        (shapeZips[s.id] || []).forEach(z => assigned.add(z));
+      } else {
+        (shapeZips[s.id] || []).forEach(z => drawn.add(z));
+      }
+    });
+    displayZips = Array.from(drawn).filter(z => !assigned.has(z)).sort();
   }
 
   countEl.textContent = displayZips.length.toLocaleString() + (showUnassignedOnly ? ' unassigned' : '');
@@ -1105,6 +1115,9 @@ function renderConflictPanel() {
   const section  = document.getElementById('conflictSection');
   const badge    = document.getElementById('conflictBadge');
   const listWrap = document.getElementById('conflictListWrap');
+
+  // Hide conflict panel entirely when Unassigned Only is on (overlaps are intentional)
+  if (showUnassignedOnly) { section.style.display = 'none'; return; }
 
   // When focused on one area, only show conflicts involving that area
   let entries = Object.entries(conflictData);
