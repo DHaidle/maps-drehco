@@ -645,6 +645,7 @@ function focusArea(id) {
   }
 
   renderShapesBar();
+  renderConflictPanel();
   setStatus(`Focused: ${s ? s.label : ''} · ${zipResult.length.toLocaleString()} ZIPs`, 'ok');
 }
 
@@ -668,6 +669,7 @@ function setShowAll(val) {
   renderZipList();
 
   renderShapesBar();
+  renderConflictPanel();
   setStatus(`✓ ${zipResult.length.toLocaleString()} ZIPs across ${shapes.length} areas`, 'ok');
 }
 
@@ -1000,16 +1002,22 @@ function computeAndRenderConflicts() {
 }
 
 function renderConflictPanel() {
-  const section = document.getElementById('conflictSection');
-  const badge   = document.getElementById('conflictBadge');
+  const section  = document.getElementById('conflictSection');
+  const badge    = document.getElementById('conflictBadge');
   const listWrap = document.getElementById('conflictListWrap');
-  const count = Object.keys(conflictData).length;
 
-  if (!count) { section.style.display = 'none'; return; }
+  // When focused on one area, only show conflicts involving that area
+  let entries = Object.entries(conflictData);
+  if (!showAllMode && focusedShapeId) {
+    entries = entries.filter(([, sids]) => sids.includes(focusedShapeId));
+  }
+  entries.sort((a, b) => a[0].localeCompare(b[0]));
+
+  if (!entries.length) { section.style.display = 'none'; return; }
   section.style.display = 'block';
-  badge.textContent = count;
+  badge.textContent = entries.length;
 
-  const items = Object.entries(conflictData).sort((a,b) => a[0].localeCompare(b[0])).map(([zip, sids]) => {
+  listWrap.innerHTML = entries.map(([zip, sids]) => {
     const areaNames = sids.map(sid => {
       const s = shapes.find(x => x.id === sid);
       return s ? s.label : '?';
@@ -1019,7 +1027,6 @@ function renderConflictPanel() {
       <span class="conflict-areas-txt">${esc(areaNames)}</span>
     </div>`;
   }).join('');
-  listWrap.innerHTML = items;
 }
 
 function renderConflictMarkers() {
