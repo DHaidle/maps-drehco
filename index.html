@@ -203,6 +203,22 @@ body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:colum
 @keyframes spin{to{transform:rotate(360deg)}}
 
 
+/* ── Import summary popup ── */
+.import-summary-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10002;display:none;align-items:center;justify-content:center}
+.import-summary-bg.open{display:flex}
+.import-summary-box{background:#fff;border-radius:10px;padding:24px;width:500px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.3);border-top:4px solid #22c55e}
+.import-summary-box h3{font-size:.95rem;font-weight:700;color:var(--navy);margin-bottom:4px}
+.import-summary-stats{font-size:.78rem;color:#555;margin-bottom:14px}
+.import-summary-no-conflicts{font-size:.82rem;color:#16a34a;padding:10px 12px;background:#f0fdf4;border-radius:6px;border:1px solid #bbf7d0;margin-bottom:4px}
+.import-summary-conflict-header{font-size:.78rem;font-weight:700;color:#666;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px}
+.resolution-row{display:flex;flex-direction:column;gap:3px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:7px;margin-bottom:7px;background:#fafafa}
+.resolution-winner{display:flex;align-items:center;gap:6px;font-size:.82rem}
+.resolution-loser{display:flex;align-items:center;gap:6px;font-size:.82rem;color:#888}
+.res-badge-win{font-size:.68rem;padding:1px 6px;border-radius:10px;background:#dcfce7;color:#166534;font-weight:700;white-space:nowrap}
+.res-badge-alt{font-size:.68rem;padding:1px 6px;border-radius:10px;background:#fef9c3;color:#854d0e;font-weight:700;white-space:nowrap}
+.res-zip-count{font-size:.72rem;color:#94a3b8;margin-left:auto;white-space:nowrap}
+.res-reason{font-size:.72rem;color:#94a3b8;margin-top:2px}
+
 /* ── Export format modal ── */
 .export-fmt-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10001;display:none;align-items:center;justify-content:center}
 .export-fmt-bg.open{display:flex}
@@ -313,6 +329,18 @@ body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:colum
   <span id="statusText">Loading ZIP data…</span>
 </div>
 
+
+<!-- Import Summary Popup -->
+<div class="import-summary-bg" id="importSummaryBg">
+  <div class="import-summary-box">
+    <h3 id="importSummaryTitle">✓ Import Complete</h3>
+    <div class="import-summary-stats" id="importSummaryStats"></div>
+    <div id="importSummaryBody"></div>
+    <div style="text-align:right;margin-top:14px">
+      <button class="btn btn-blue btn-sm" onclick="document.getElementById('importSummaryBg').classList.remove('open')">Got it</button>
+    </div>
+  </div>
+</div>
 
 <!-- Export Format Modal -->
 <div class="export-fmt-bg" id="exportFmtBg">
@@ -1767,10 +1795,10 @@ function processServiceAreaCSV(text, filename) {
   if (shapes.length > 0 && !confirm(`Clear the ${shapes.length} existing area(s) and import from "${filename}"?`)) return;
 
   // Phase 2: assign ZIPs — most specific range wins (smaller rangeSize = higher priority)
-  // Loser becomes an alt carrier for the overlapping ZIPs. No modal needed.
-  const zipPrimary = {};   // zip → { carrier, terminal, rangeSize }
-  const zipAlts    = {};   // zip → [[carrier, terminal], ...]
-  let autoResolved = 0;
+  // Loser becomes an alt carrier for the overlapping ZIPs.
+  const zipPrimary = {};      // zip → { carrier, terminal, rangeSize }
+  const zipAlts    = {};      // zip → [[carrier, terminal], ...]
+  const resolutionGroups = new Map(); // key → { wCarrier, wTerminal, wRange, lCarrier, lTerminal, lRange, count }
 
   for (const { carrier, terminal, zips, rangeSize, alts } of parsedRows) {
     for (const z of zips) {
@@ -1784,15 +1812,21 @@ function processServiceAreaCSV(text, filename) {
           if (!zipAlts[z].some(([c,t]) => c === existing.carrier && t === existing.terminal)) {
             zipAlts[z].unshift([existing.carrier, existing.terminal]);
           }
+          // Track this resolution (new beats existing)
+          const key = `${carrier}\x00${terminal}\x00${existing.carrier}\x00${existing.terminal}`;
+          if (!resolutionGroups.has(key)) resolutionGroups.set(key, { wCarrier: carrier, wTerminal: terminal, wRange: rangeSize, lCarrier: existing.carrier, lTerminal: existing.terminal, lRange: existing.rangeSize, count: 0 });
+          resolutionGroups.get(key).count++;
           zipPrimary[z] = { carrier, terminal, rangeSize };
-          autoResolved++;
         } else {
           // Existing is equally or more specific — new row becomes alt
           if (!zipAlts[z]) zipAlts[z] = [];
           if (!zipAlts[z].some(([c,t]) => c === carrier && t === terminal)) {
             zipAlts[z].push([carrier, terminal]);
           }
-          if (rangeSize < existing.rangeSize + 1) autoResolved++; // count ties too
+          // Track this resolution (existing beats new)
+          const key = `${existing.carrier}\x00${existing.terminal}\x00${carrier}\x00${terminal}`;
+          if (!resolutionGroups.has(key)) resolutionGroups.set(key, { wCarrier: existing.carrier, wTerminal: existing.terminal, wRange: existing.rangeSize, lCarrier: carrier, lTerminal: terminal, lRange: rangeSize, count: 0 });
+          resolutionGroups.get(key).count++;
         }
       } else {
         zipPrimary[z] = { carrier, terminal, rangeSize };
@@ -1805,13 +1839,10 @@ function processServiceAreaCSV(text, filename) {
     }
   }
 
-  if (autoResolved > 0) {
-    setStatus(`ℹ Auto-resolved ${autoResolved} ZIP conflict${autoResolved>1?'s':''} — more specific range wins`, 'ok');
-  }
-  finalizeServiceImport(zipPrimary, zipAlts, filename);
+  finalizeServiceImport(zipPrimary, zipAlts, filename, resolutionGroups);
 }
 
-function finalizeServiceImport(zipPrimary, zipAlts, filename) {
+function finalizeServiceImport(zipPrimary, zipAlts, filename, resolutionGroups) {
   const zipLookup = new Map(zipData.map(z => [z[0], z]));
 
   // Build carrierGroups from resolved primary assignments
@@ -1907,8 +1938,41 @@ function finalizeServiceImport(zipPrimary, zipAlts, filename) {
   }
 
   const carrierCount = carrierOrder.length;
-  toast(`✓ Imported ${carrierCount} carrier${carrierCount>1?'s':''} · ${imported} terminals · ${zipResult.length.toLocaleString()} ZIPs`);
   setStatus(`✓ Imported "${filename}" · ${imported} terminals · ${zipResult.length.toLocaleString()} ZIPs`, 'ok');
+  showImportSummaryPopup(filename, carrierCount, imported, zipResult.length, resolutionGroups || new Map());
+}
+
+function showImportSummaryPopup(filename, carrierCount, terminalCount, zipCount, resolutionGroups) {
+  document.getElementById('importSummaryTitle').textContent = '✓ Import Complete';
+  document.getElementById('importSummaryStats').textContent =
+    `${carrierCount} carrier${carrierCount>1?'s':''} · ${terminalCount} terminal${terminalCount>1?'s':''} · ${zipCount.toLocaleString()} ZIPs from "${filename}"`;
+
+  const body = document.getElementById('importSummaryBody');
+  const groups = Array.from(resolutionGroups.values());
+  const totalResolved = groups.reduce((s, g) => s + g.count, 0);
+
+  if (!groups.length) {
+    body.innerHTML = `<div class="import-summary-no-conflicts">✓ No overlapping ZIPs — every ZIP had a single carrier assignment</div>`;
+  } else {
+    // Sort by zip count descending
+    groups.sort((a, b) => b.count - a.count);
+    body.innerHTML = `
+      <div class="import-summary-conflict-header">${totalResolved.toLocaleString()} overlapping ZIP${totalResolved>1?'s':''} auto-resolved</div>
+      ${groups.map(g => `
+        <div class="resolution-row">
+          <div class="resolution-winner">
+            <span class="res-badge-win">PRIMARY</span>
+            <span><b>${esc(g.wTerminal)}</b> <span style="color:#aaa;font-size:.75rem">${esc(g.wCarrier)}</span></span>
+            <span class="res-zip-count">${g.count.toLocaleString()} ZIP${g.count>1?'s':''}</span>
+          </div>
+          <div class="resolution-loser">
+            <span class="res-badge-alt">ALT 1</span>
+            <span>${esc(g.lTerminal)} <span style="font-size:.75rem">${esc(g.lCarrier)}</span></span>
+          </div>
+          <div class="res-reason">Range size: ${g.wRange.toLocaleString()} ZIPs (winner) vs ${g.lRange.toLocaleString()} ZIPs (broader range → moved to Alt 1)</div>
+        </div>`).join('')}`;
+  }
+  document.getElementById('importSummaryBg').classList.add('open');
 }
 
 function parseCSVLine(line) {
