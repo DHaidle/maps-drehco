@@ -202,20 +202,6 @@ body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:colum
   border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 
-/* ── Import conflict modal ── */
-.import-conflict-bg{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10001;display:none;align-items:center;justify-content:center}
-.import-conflict-bg.open{display:flex}
-.import-conflict-box{background:#fff;border-radius:10px;padding:24px;width:640px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.35);border-top:4px solid var(--red)}
-.import-conflict-box h3{font-size:.98rem;font-weight:700;color:var(--navy);margin-bottom:6px}
-.conflict-group-row{border:1.5px solid #fde8e8;border-radius:7px;padding:10px 14px;margin-bottom:8px;display:flex;align-items:center;gap:10px;background:#fff9f9}
-.conflict-group-row.resolved{border-color:#d6e8fb;background:#f0f8ff}
-.conflict-group-info{flex:1;min-width:0}
-.conflict-group-zips{font-size:.75rem;color:#888;font-weight:700}
-.conflict-group-pair{font-size:.82rem;color:#333;margin-top:3px}
-.conflict-group-btns{display:flex;gap:6px;flex-shrink:0}
-.cg-btn{padding:5px 11px;border-radius:6px;border:1.5px solid #ddd;background:#f5f5f5;font-size:.75rem;cursor:pointer;font-family:Arial;transition:all .15s;white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis}
-.cg-btn:hover{border-color:var(--blue);background:#eef4fb}
-.cg-btn.chosen{border-color:var(--blue);background:var(--blue);color:#fff;font-weight:700}
 
 /* ── Export format modal ── */
 .export-fmt-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10001;display:none;align-items:center;justify-content:center}
@@ -327,21 +313,6 @@ body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:colum
   <span id="statusText">Loading ZIP data…</span>
 </div>
 
-<!-- Import Conflict Modal -->
-<div class="import-conflict-bg" id="importConflictBg">
-  <div class="import-conflict-box">
-    <h3>⚠ Resolve Import Conflicts</h3>
-    <p style="font-size:.78rem;color:#666;margin-bottom:12px">These ZIP codes are claimed by more than one row. For each group, choose which terminal should be the primary assignment. The other becomes an Alt carrier.</p>
-    <div id="conflictGroupList" style="max-height:400px;overflow-y:auto;padding-right:4px"></div>
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:14px;padding-top:12px;border-top:1px solid #eee">
-      <span style="font-size:.76rem;color:#888" id="conflictResolveStat"></span>
-      <div style="display:flex;gap:8px">
-        <button class="btn btn-red btn-sm" id="conflictCancelImportBtn">✕ Cancel</button>
-        <button class="btn btn-green btn-sm" id="conflictFinishImportBtn" disabled>✓ Finish Import</button>
-      </div>
-    </div>
-  </div>
-</div>
 
 <!-- Export Format Modal -->
 <div class="export-fmt-bg" id="exportFmtBg">
@@ -1789,31 +1760,44 @@ function processServiceAreaCSV(text, filename) {
       const at = (cols[ti]||'').trim();
       if (ac && at) alts.push([ac, at]);
     }
-    parsedRows.push({ carrier, terminal, zips, alts });
+    parsedRows.push({ carrier, terminal, zips, rangeSize: zips.length, alts });
   }
 
   if (!parsedRows.length) { toast('⚠ No valid rows found in CSV'); return; }
   if (shapes.length > 0 && !confirm(`Clear the ${shapes.length} existing area(s) and import from "${filename}"?`)) return;
 
-  // Phase 2: build zipPrimary, detect conflicts
-  const zipPrimary = {};   // zip → { carrier, terminal }
+  // Phase 2: assign ZIPs — most specific range wins (smaller rangeSize = higher priority)
+  // Loser becomes an alt carrier for the overlapping ZIPs. No modal needed.
+  const zipPrimary = {};   // zip → { carrier, terminal, rangeSize }
   const zipAlts    = {};   // zip → [[carrier, terminal], ...]
-  const conflictGroups = {}; // key → { zips: [], a: {carrier,terminal}, b: {carrier,terminal}, resolution: null }
+  let autoResolved = 0;
 
-  for (const { carrier, terminal, zips, alts } of parsedRows) {
+  for (const { carrier, terminal, zips, rangeSize, alts } of parsedRows) {
     for (const z of zips) {
-      if (zipPrimary[z] && (zipPrimary[z].carrier !== carrier || zipPrimary[z].terminal !== terminal)) {
-        // Conflict: two rows claim this ZIP as primary
+      if (zipPrimary[z]) {
         const existing = zipPrimary[z];
-        const key = [existing.terminal, terminal].sort().join('\x00');
-        if (!conflictGroups[key]) {
-          conflictGroups[key] = { zips: [], a: existing, b: { carrier, terminal }, resolution: null };
+        if (existing.carrier === carrier && existing.terminal === terminal) continue;
+        // Smaller range = more specific = wins. Tie goes to the first (earlier) row.
+        if (rangeSize < existing.rangeSize) {
+          // New row is more specific — it takes primary, existing becomes alt
+          if (!zipAlts[z]) zipAlts[z] = [];
+          if (!zipAlts[z].some(([c,t]) => c === existing.carrier && t === existing.terminal)) {
+            zipAlts[z].unshift([existing.carrier, existing.terminal]);
+          }
+          zipPrimary[z] = { carrier, terminal, rangeSize };
+          autoResolved++;
+        } else {
+          // Existing is equally or more specific — new row becomes alt
+          if (!zipAlts[z]) zipAlts[z] = [];
+          if (!zipAlts[z].some(([c,t]) => c === carrier && t === terminal)) {
+            zipAlts[z].push([carrier, terminal]);
+          }
+          if (rangeSize < existing.rangeSize + 1) autoResolved++; // count ties too
         }
-        if (!conflictGroups[key].zips.includes(z)) conflictGroups[key].zips.push(z);
-      } else if (!zipPrimary[z]) {
-        zipPrimary[z] = { carrier, terminal };
+      } else {
+        zipPrimary[z] = { carrier, terminal, rangeSize };
       }
-      // Build alt list for this ZIP (from row's alt carriers)
+      // Alt carriers from this row's alt columns
       if (!zipAlts[z]) zipAlts[z] = [];
       for (const [ac, at] of alts) {
         if (!zipAlts[z].some(([c,t]) => c === ac && t === at)) zipAlts[z].push([ac, at]);
@@ -1821,84 +1805,10 @@ function processServiceAreaCSV(text, filename) {
     }
   }
 
-  const groupKeys = Object.keys(conflictGroups);
-  if (groupKeys.length > 0) {
-    // Show conflict resolution modal before finalizing
-    showImportConflictModal(conflictGroups, zipPrimary, zipAlts, filename);
-  } else {
-    finalizeServiceImport(zipPrimary, zipAlts, filename);
+  if (autoResolved > 0) {
+    setStatus(`ℹ Auto-resolved ${autoResolved} ZIP conflict${autoResolved>1?'s':''} — more specific range wins`, 'ok');
   }
-}
-
-function showImportConflictModal(conflictGroups, zipPrimary, zipAlts, filename) {
-  const keys = Object.keys(conflictGroups);
-  let resolvedCount = 0;
-
-  function updateStatus() {
-    const stat = document.getElementById('conflictResolveStat');
-    const btn  = document.getElementById('conflictFinishImportBtn');
-    stat.textContent = `${resolvedCount} of ${keys.length} group${keys.length>1?'s':''} resolved`;
-    btn.disabled = resolvedCount < keys.length;
-  }
-
-  const list = document.getElementById('conflictGroupList');
-  list.innerHTML = keys.map((key, idx) => {
-    const g = conflictGroups[key];
-    const aLabel = `${g.a.carrier} / ${g.a.terminal}`;
-    const bLabel = `${g.b.carrier} / ${g.b.terminal}`;
-    return `<div class="conflict-group-row" id="cgRow${idx}">
-      <div class="conflict-group-info">
-        <div class="conflict-group-zips">⚠ ${g.zips.length} ZIP${g.zips.length>1?'s':''} overlap</div>
-        <div class="conflict-group-pair"><b>A:</b> ${esc(aLabel)}<br><b>B:</b> ${esc(bLabel)}</div>
-      </div>
-      <div class="conflict-group-btns">
-        <button class="cg-btn" id="cgBtnA${idx}" onclick="resolveConflictGroup(${idx},'a')" title="${esc(aLabel)}">Use A</button>
-        <button class="cg-btn" id="cgBtnB${idx}" onclick="resolveConflictGroup(${idx},'b')" title="${esc(bLabel)}">Use B</button>
-      </div>
-    </div>`;
-  }).join('');
-
-  // Store state for the resolve function
-  window._pendingConflict = { keys, conflictGroups, zipPrimary, zipAlts, filename,
-    resolved: {}, get count() { return Object.keys(this.resolved).length; } };
-
-  window.resolveConflictGroup = function(idx, choice) {
-    const key = keys[idx];
-    const g = conflictGroups[key];
-    const winner = choice === 'a' ? g.a : g.b;
-    const loser  = choice === 'a' ? g.b : g.a;
-    // Update zipPrimary for all conflicted ZIPs
-    g.zips.forEach(z => {
-      zipPrimary[z] = winner;
-      // Add loser terminal as an alt (merged, deduped)
-      if (!zipAlts[z]) zipAlts[z] = [];
-      if (!zipAlts[z].some(([c,t]) => c === loser.carrier && t === loser.terminal)) {
-        zipAlts[z].unshift([loser.carrier, loser.terminal]); // loser becomes alt1
-      }
-    });
-    // Update UI
-    const row = document.getElementById(`cgRow${idx}`);
-    if (row) { row.classList.add('resolved'); }
-    document.getElementById(`cgBtnA${idx}`).classList.toggle('chosen', choice==='a');
-    document.getElementById(`cgBtnB${idx}`).classList.toggle('chosen', choice==='b');
-    window._pendingConflict.resolved[idx] = choice;
-    resolvedCount = Object.keys(window._pendingConflict.resolved).length;
-    updateStatus();
-  };
-
-  updateStatus();
-  document.getElementById('importConflictBg').classList.add('open');
-
-  document.getElementById('conflictCancelImportBtn').onclick = () => {
-    document.getElementById('importConflictBg').classList.remove('open');
-    window._pendingConflict = null;
-  };
-  document.getElementById('conflictFinishImportBtn').onclick = () => {
-    document.getElementById('importConflictBg').classList.remove('open');
-    const p = window._pendingConflict;
-    window._pendingConflict = null;
-    finalizeServiceImport(p.zipPrimary, p.zipAlts, p.filename);
-  };
+  finalizeServiceImport(zipPrimary, zipAlts, filename);
 }
 
 function finalizeServiceImport(zipPrimary, zipAlts, filename) {
