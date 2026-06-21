@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ZIP Code Map — maps.drehco.com</title>
+<title>ZIP Code Map — maps.cptms.com</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -201,6 +201,36 @@ body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:colum
 .spinner{width:40px;height:40px;border:4px solid rgba(255,255,255,.2);border-top-color:#fff;
   border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Import conflict modal ── */
+.import-conflict-bg{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10001;display:none;align-items:center;justify-content:center}
+.import-conflict-bg.open{display:flex}
+.import-conflict-box{background:#fff;border-radius:10px;padding:24px;width:640px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.35);border-top:4px solid var(--red)}
+.import-conflict-box h3{font-size:.98rem;font-weight:700;color:var(--navy);margin-bottom:6px}
+.conflict-group-row{border:1.5px solid #fde8e8;border-radius:7px;padding:10px 14px;margin-bottom:8px;display:flex;align-items:center;gap:10px;background:#fff9f9}
+.conflict-group-row.resolved{border-color:#d6e8fb;background:#f0f8ff}
+.conflict-group-info{flex:1;min-width:0}
+.conflict-group-zips{font-size:.75rem;color:#888;font-weight:700}
+.conflict-group-pair{font-size:.82rem;color:#333;margin-top:3px}
+.conflict-group-btns{display:flex;gap:6px;flex-shrink:0}
+.cg-btn{padding:5px 11px;border-radius:6px;border:1.5px solid #ddd;background:#f5f5f5;font-size:.75rem;cursor:pointer;font-family:Arial;transition:all .15s;white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis}
+.cg-btn:hover{border-color:var(--blue);background:#eef4fb}
+.cg-btn.chosen{border-color:var(--blue);background:var(--blue);color:#fff;font-weight:700}
+
+/* ── Export format modal ── */
+.export-fmt-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10001;display:none;align-items:center;justify-content:center}
+.export-fmt-bg.open{display:flex}
+.export-fmt-box{background:#fff;border-radius:10px;padding:24px;width:420px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.3);border-top:4px solid var(--blue)}
+.export-fmt-option{display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:10px 12px;border:1.5px solid #dde4ee;border-radius:6px;margin-bottom:8px;transition:all .15s}
+.export-fmt-option:hover{border-color:var(--blue);background:#eef4fb}
+.export-fmt-option.chosen{border-color:var(--blue);background:#eef4fb}
+.export-fmt-ttl{font-size:.85rem;font-weight:700;color:#1F3864}
+.export-fmt-desc{font-size:.74rem;color:#888;margin-top:2px}
+
+/* ── Dot view toggle ── */
+.dot-view-btn{font-size:.68rem;padding:2px 8px;border-radius:8px;border:1.5px solid #ED7D31;color:#ED7D31;background:#fff;cursor:pointer;font-weight:700;transition:all .15s;white-space:nowrap}
+.dot-view-btn.active{background:#ED7D31;color:#fff}
+.dot-view-btn:hover{background:#ED7D31;color:#fff}
 </style>
 </head>
 <body>
@@ -297,6 +327,42 @@ body{font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:colum
   <span id="statusText">Loading ZIP data…</span>
 </div>
 
+<!-- Import Conflict Modal -->
+<div class="import-conflict-bg" id="importConflictBg">
+  <div class="import-conflict-box">
+    <h3>⚠ Resolve Import Conflicts</h3>
+    <p style="font-size:.78rem;color:#666;margin-bottom:12px">These ZIP codes are claimed by more than one row. For each group, choose which terminal should be the primary assignment. The other becomes an Alt carrier.</p>
+    <div id="conflictGroupList" style="max-height:400px;overflow-y:auto;padding-right:4px"></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:14px;padding-top:12px;border-top:1px solid #eee">
+      <span style="font-size:.76rem;color:#888" id="conflictResolveStat"></span>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-red btn-sm" id="conflictCancelImportBtn">✕ Cancel</button>
+        <button class="btn btn-green btn-sm" id="conflictFinishImportBtn" disabled>✓ Finish Import</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Export Format Modal -->
+<div class="export-fmt-bg" id="exportFmtBg">
+  <div class="export-fmt-box">
+    <h3>Export Format</h3>
+    <p style="font-size:.78rem;color:#666;margin-bottom:14px">How should ZIP codes be written to the file?</p>
+    <div class="export-fmt-option chosen" id="fmtOptIndividual" onclick="selectExportFmt('individual')">
+      <input type="radio" name="exportFmt" value="individual" checked style="margin-top:2px;flex-shrink:0"/>
+      <div><div class="export-fmt-ttl">Individual ZIP rows</div><div class="export-fmt-desc">One row per ZIP — lossless, easiest to reimport into TLS</div></div>
+    </div>
+    <div class="export-fmt-option" id="fmtOptRanges" onclick="selectExportFmt('ranges')">
+      <input type="radio" name="exportFmt" value="ranges" style="margin-top:2px;flex-shrink:0"/>
+      <div><div class="export-fmt-ttl">ZIP ranges</div><div class="export-fmt-desc">Collapses consecutive ZIPs per terminal into From–To ranges — more compact</div></div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button class="btn btn-sm" style="background:#eee;color:#444" id="exportFmtCancelBtn">Cancel</button>
+      <button class="btn btn-blue btn-sm" id="exportFmtOkBtn">⬇ Export</button>
+    </div>
+  </div>
+</div>
+
 <!-- Toast -->
 <div class="toast hidden" id="toast"></div>
 
@@ -389,6 +455,7 @@ let showAllMode       = true;
 let focusedShapeIds   = new Set(); // supports multi-select
 let showUnassignedOnly = false;    // COMMENTED OUT — pending UX review
 let zipAltData = {};               // { zip: [[altCarrier, altTerminal], ...] } — populated on Service Area import
+let dotViewMode = false;           // true = all ZIP dots visible; false = hull polygons
 
 // ── Map init ──────────────────────────────────────────────────────────────
 const map = L.map('map', { center: [39.5, -98.35], zoom: 5 });
@@ -727,7 +794,8 @@ function renderShapesBar() {
           <option value="alpha" ${shapeSort==='alpha'?'selected':''}>A–Z</option>
           <option value="geo"   ${shapeSort==='geo'  ?'selected':''}>NE → SW</option>
         </select>
-        <button class="show-all-btn ${showAllActive}" onclick="setShowAll(true)">👁 Show All</button>
+        <button class="show-all-btn ${showAllActive}" onclick="setShowAll(true)">👁 Hulls</button>
+        ${hasCarriers ? `<button class="dot-view-btn ${dotViewMode?'active':''}" onclick="showAllDots()" title="Show every ZIP as a colored dot">⚫ Dot View</button>` : ''}
       </div>
     </div>
     ${chips}`;
@@ -840,6 +908,7 @@ function focusCarrier(carrierName) {
 
 function setShowAll(val) {
   showAllMode = val;
+  dotViewMode = false;
   focusedShapeIds.clear();
 
   // Clear focus dots, restore all hulls
@@ -861,6 +930,39 @@ function setShowAll(val) {
   renderShapesBar();
   renderConflictPanel();
   setStatus(`✓ ${zipResult.length.toLocaleString()} ZIPs across ${shapes.length} areas`, 'ok');
+}
+
+function showAllDots() {
+  dotViewMode = true;
+  showAllMode = false;
+  focusedShapeIds.clear();
+  focusDotLayer.clearLayers();
+  const zlookup = new Map(zipData.map(z => [z[0], z]));
+  // Hide all hull polygons
+  shapes.forEach(s => {
+    if (s.layer.setStyle) s.layer.setStyle({ opacity: 0, fillOpacity: 0 });
+    (s.extraLayers || []).forEach(l => { if (l.setStyle) l.setStyle({ opacity: 0, fillOpacity: 0 }); });
+  });
+  conflictMarkerLayer.eachLayer(m => m.setStyle && m.setStyle({ opacity: 0, fillOpacity: 0 }));
+  // Draw one dot per ZIP per terminal
+  shapes.forEach(s => {
+    (shapeZips[s.id] || []).forEach(zip => {
+      const entry = zlookup.get(zip);
+      if (!entry) return;
+      L.circleMarker([entry[1], entry[2]], {
+        radius: 4, color: s.color, fillColor: s.color, weight: 1, fillOpacity: 0.85, opacity: 1
+      }).bindTooltip(`<b>${zip}</b> — ${entry[3]}, ${entry[4]}<br>${esc(s.carrier||'')} / ${esc(s.label)}`, { sticky: true })
+        .addTo(focusDotLayer);
+    });
+  });
+  // Restore ZIP list to all
+  const allFound = new Set();
+  for (const zips of Object.values(shapeZips)) zips.forEach(z => allFound.add(z));
+  zipResult = Array.from(allFound).sort();
+  renderZipList();
+  renderShapesBar();
+  renderConflictPanel();
+  setStatus(`⚫ Dot view — ${zipResult.length.toLocaleString()} ZIPs · ${shapes.length} terminals`, 'ok');
 }
 
 function renameShape(id, e) {
@@ -953,60 +1055,111 @@ document.getElementById('copyBtn').addEventListener('click', () => {
 });
 
 document.getElementById('csvBtn').addEventListener('click', () => {
-  const toLine = r => r.map(v => `"${(v||'').toString().replace(/"/g,'""')}"`).join(',');
-  const name = document.getElementById('projectNameInput').value.trim() || 'zip_codes';
   const hasCarriers = shapes.some(s => s.carrier);
-  let csv, rowCount;
-
   if (hasCarriers) {
-    // Service Area format — individual ZIP rows, minus mod fields
-    const zipLookup = new Map(zipData.map(z => [z[0], z]));
-    const svcHeader = ['Country','From Zip','To Zip','City','State','Carrier','From/To Point',
-      'Days In','Days Out','Carrier Alt1','From/To Point Alt1','Days In Alt1','Days Out Alt1',
-      'Carrier Alt2','From/To Point Alt2','Days In Alt2','Days Out Alt2',
-      'Carrier Alt3','From/To Point Alt3','Days In Alt3','Days Out Alt3',
-      'Carrier Alt4','From/To Point Alt4','Days In Alt4','Days Out Alt4'];
-    const dataRows = [];
-    shapes.forEach(s => {
-      (shapeZips[s.id] || []).slice().sort().forEach(z => {
-        const entry = zipLookup.get(z);
-        const city  = entry ? entry[3] : '';
-        const state = entry ? entry[4] : '';
-        const alts = zipAltData[z] || [];
-        const altFields = ['','','','','','','','','','','','','','','',''];
-        alts.slice(0,4).forEach(([ac,at], i) => {
-          altFields[i*4]   = ac;
-          altFields[i*4+1] = at;
-          altFields[i*4+2] = '0';
-          altFields[i*4+3] = '0';
-        });
-        dataRows.push(['US', z, z, city, state, s.carrier||'', s.label, '0','0', ...altFields]);
-      });
-    });
-    rowCount = dataRows.length;
-    csv = ['Service Area', toLine(svcHeader), ...dataRows.map(toLine)].join('\n');
+    // Show format dialog
+    selectExportFmt('individual'); // reset to default
+    document.getElementById('exportFmtBg').classList.add('open');
   } else {
-    // Area/Route format
-    const header = ['Start Postal Code','End Postal Code','Area/Route'];
-    const dataRows = [];
-    if (shapes.length > 0 && Object.keys(shapeZips).length > 0) {
-      shapes.forEach(s => {
-        (shapeZips[s.id] || []).slice().sort().forEach(z => dataRows.push([z, z, s.label]));
-      });
-    } else {
-      zipResult.forEach(z => dataRows.push([z, z, 'All Areas']));
-    }
-    rowCount = dataRows.length;
-    csv = [toLine(header), ...dataRows.map(toLine)].join('\n');
+    doExportAreaRoute();
   }
+});
 
+let _selectedExportFmt = 'individual';
+function selectExportFmt(fmt) {
+  _selectedExportFmt = fmt;
+  document.getElementById('fmtOptIndividual').classList.toggle('chosen', fmt==='individual');
+  document.getElementById('fmtOptRanges').classList.toggle('chosen', fmt==='ranges');
+  document.querySelector('#fmtOptIndividual input').checked = fmt==='individual';
+  document.querySelector('#fmtOptRanges input').checked = fmt==='ranges';
+}
+document.getElementById('exportFmtCancelBtn').addEventListener('click', () => {
+  document.getElementById('exportFmtBg').classList.remove('open');
+});
+document.getElementById('exportFmtOkBtn').addEventListener('click', () => {
+  document.getElementById('exportFmtBg').classList.remove('open');
+  doExportServiceArea(_selectedExportFmt);
+});
+
+function doExportServiceArea(fmt) {
+  const toLine = r => r.map(v => `"${(v||'').toString().replace(/"/g,'""')}"`).join(',');
+  const name = document.getElementById('projectNameInput').value.trim() || 'service_area';
+  const zipLookup = new Map(zipData.map(z => [z[0], z]));
+  const svcHeader = ['Country','From Zip','To Zip','City','State','Carrier','From/To Point',
+    'Days In','Days Out','Actual Toll','Charge Toll',
+    'Carrier Alt1','From/To Point Alt1','Days In Alt1','Days Out Alt1','Actual Toll Alt1','Charge Toll Alt1',
+    'Carrier Alt2','From/To Point Alt2','Days In Alt2','Days Out Alt2','Actual Toll Alt2','Charge Toll Alt2',
+    'Carrier Alt3','From/To Point Alt3','Days In Alt3','Days Out Alt3','Actual Toll Alt3','Charge Toll Alt3',
+    'Carrier Alt4','From/To Point Alt4','Days In Alt4','Days Out Alt4','Actual Toll Alt4','Charge Toll Alt4'];
+  const dataRows = [];
+
+  shapes.forEach(s => {
+    const sortedZips = (shapeZips[s.id] || []).slice().sort();
+    const entries = fmt === 'ranges' ? collapseToRanges(sortedZips) : sortedZips.map(z => [z, z]);
+    entries.forEach(([fromZ, toZ]) => {
+      const entry = zipLookup.get(fromZ);
+      const city  = entry ? entry[3] : '';
+      const state = entry ? entry[4] : '';
+      const alts  = zipAltData[fromZ] || [];
+      const altFields = new Array(24).fill('');
+      alts.slice(0,4).forEach(([ac,at], i) => {
+        altFields[i*6]   = ac;
+        altFields[i*6+1] = at;
+        altFields[i*6+2] = '0';
+        altFields[i*6+3] = '0';
+        altFields[i*6+4] = '0.00';
+        altFields[i*6+5] = '0.00';
+      });
+      dataRows.push(['US', fromZ, toZ, city, state, s.carrier||'', s.label, '0','0','0.00','0.00', ...altFields]);
+    });
+  });
+
+  const csv = ['Service Area', toLine(svcHeader), ...dataRows.map(toLine)].join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = name.replace(/[^a-z0-9_-]/gi,'_') + '_export.csv';
   a.click();
-  toast(`Exported ${rowCount.toLocaleString()} rows`);
-});
+  toast(`Exported ${dataRows.length.toLocaleString()} rows (${fmt})`);
+}
+
+function doExportAreaRoute() {
+  const toLine = r => r.map(v => `"${(v||'').toString().replace(/"/g,'""')}"`).join(',');
+  const name = document.getElementById('projectNameInput').value.trim() || 'zip_codes';
+  const header = ['Start Postal Code','End Postal Code','Area/Route'];
+  const dataRows = [];
+  if (shapes.length > 0 && Object.keys(shapeZips).length > 0) {
+    shapes.forEach(s => {
+      (shapeZips[s.id] || []).slice().sort().forEach(z => dataRows.push([z, z, s.label]));
+    });
+  } else {
+    zipResult.forEach(z => dataRows.push([z, z, 'All Areas']));
+  }
+  const csv = [toLine(header), ...dataRows.map(toLine)].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name.replace(/[^a-z0-9_-]/gi,'_') + '_export.csv';
+  a.click();
+  toast(`Exported ${dataRows.length.toLocaleString()} rows`);
+}
+
+function collapseToRanges(sortedZips) {
+  if (!sortedZips.length) return [];
+  const ranges = [];
+  let start = sortedZips[0], prev = sortedZips[0];
+  for (let i = 1; i < sortedZips.length; i++) {
+    const curr = sortedZips[i];
+    if (curr.length === 5 && prev.length === 5 && parseInt(curr) === parseInt(prev) + 1) {
+      prev = curr;
+    } else {
+      ranges.push([start, prev]);
+      start = curr; prev = curr;
+    }
+  }
+  ranges.push([start, prev]);
+  return ranges;
+}
 
 // ── Clear ──────────────────────────────────────────────────────────────────
 document.getElementById('clearBtn').addEventListener('click', () => {
@@ -1568,74 +1721,198 @@ document.getElementById('importSvcFile').addEventListener('change', function() {
 });
 
 function processServiceAreaCSV(text, filename) {
-  // Format: row 1 = "Service Area" title, row 2 = headers
-  // Columns: Country, From Zip, To Zip, City, State, Carrier, From/To Point, Days In, Days Out,
-  //          Carrier Alt1, From/To Point Alt1, ... (up to Alt4), Added By, Added On, Modified By, Modified On
-  // Supports: individual ZIPs, ZIP ranges, state-level rows, Alt carrier columns
+  // Columns: 0:Country 1:From Zip 2:To Zip 3:City 4:State 5:Carrier 6:From/To Point
+  //          7:Days In 8:Days Out 9:Actual Toll 10:Charge Toll
+  //          11:Carrier Alt1 12:From/To Point Alt1 ... (each alt = 6 cols) ...
+  //          35:Added By 36:Added On ...
   const lines = text.split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 3) { toast('⚠ CSV appears empty'); return; }
 
   const zipLookup   = new Map(zipData.map(z => [z[0], z]));
   const stateLookup = new Map();
+  const cityLookup  = new Map(); // "city|state" → [zips]
   zipData.forEach(z => {
+    // state lookup
     if (!stateLookup.has(z[4])) stateLookup.set(z[4], []);
     stateLookup.get(z[4]).push(z[0]);
+    // city+state lookup (normalized)
+    const key = z[3].toLowerCase().trim() + '|' + z[4].toUpperCase();
+    if (!cityLookup.has(key)) cityLookup.set(key, []);
+    cityLookup.get(key).push(z[0]);
   });
 
-  // carrierGroups: carrier → { terminals: termName → Set<zip>, terminalOrder: [] }
-  const carrierGroups = {};
-  const carrierOrder  = [];
-
-  function addToGroup(carrier, terminal, zips) {
-    if (!carrier || !terminal || !zips.length) return;
-    if (!carrierGroups[carrier]) { carrierGroups[carrier] = { terminals: {}, terminalOrder: [] }; carrierOrder.push(carrier); }
-    if (!carrierGroups[carrier].terminals[terminal]) { carrierGroups[carrier].terminals[terminal] = new Set(); carrierGroups[carrier].terminalOrder.push(terminal); }
-    zips.forEach(z => carrierGroups[carrier].terminals[terminal].add(z));
-  }
-
-  function expandZips(fromZip, toZip, state) {
+  function expandZips(fromZip, toZip, city, state) {
     if (fromZip && fromZip.length >= 4) {
       const fz = fromZip.padStart(5, '0');
       const tz = (toZip || fromZip).padStart(5, '0');
       if (fz === tz) return zipLookup.has(fz) ? [fz] : [];
-      // ZIP range — return all centroids in [fz, tz]
       return zipData.filter(z => z[0] >= fz && z[0] <= tz).map(z => z[0]);
     }
-    if (state && state.length === 2) return stateLookup.get(state) || [];
+    // City + state: try exact match, then partial match
+    if (city && city.trim() && state && state.length >= 2) {
+      const st = state.toUpperCase().slice(0,2);
+      const cityNorm = city.trim().toLowerCase();
+      const exactKey = cityNorm + '|' + st;
+      if (cityLookup.has(exactKey)) return cityLookup.get(exactKey);
+      // Partial: any city that contains the input string
+      const results = [];
+      cityLookup.forEach((zips, key) => {
+        if (key.endsWith('|' + st) && key.startsWith(cityNorm)) results.push(...zips);
+      });
+      if (results.length) return [...new Set(results)];
+    }
+    // State only
+    if (state && state.length >= 2) return stateLookup.get(state.toUpperCase().slice(0,2)) || [];
     return [];
   }
 
-  // Alt carrier column pairs: [carrierColIdx, terminalColIdx]
-  const altCols = [[9,10],[13,14],[17,18],[21,22]];
-  const localAltData = {}; // collect here first — global gets reset after confirm dialog
+  // Alt carrier column pairs [carrierIdx, terminalIdx] — 6 cols each: carrier, terminal, daysIn, daysOut, actualToll, chargeToll
+  const altCols = [[11,12],[17,18],[23,24],[29,30]];
 
+  // Phase 1: parse all rows into intermediate structure
+  const parsedRows = [];
   for (let i = 2; i < lines.length; i++) {
     const cols = parseCSVLine(lines[i]);
     if (cols.length < 7) continue;
     const fromZip  = cols[1].trim();
     const toZip    = cols[2].trim();
+    const city     = cols[3].trim();
     const state    = cols[4].trim();
     const carrier  = cols[5].trim();
     const terminal = cols[6].trim();
-    const zips = expandZips(fromZip, toZip, state);
+    if (!carrier || !terminal) continue;
+    const zips = expandZips(fromZip, toZip, city, state);
     if (!zips.length) continue;
-    addToGroup(carrier, terminal, zips);
-    // Alt carriers get the same ZIPs; also record alt data for export
     const alts = [];
     for (const [ci, ti] of altCols) {
-      const ac = cols[ci] ? cols[ci].trim() : '';
-      const at = cols[ti] ? cols[ti].trim() : '';
-      if (ac && at) { addToGroup(ac, at, zips); alts.push([ac, at]); }
+      const ac = (cols[ci]||'').trim();
+      const at = (cols[ti]||'').trim();
+      if (ac && at) alts.push([ac, at]);
     }
-    if (alts.length) {
-      zips.forEach(z => { localAltData[z] = alts; });
+    parsedRows.push({ carrier, terminal, zips, alts });
+  }
+
+  if (!parsedRows.length) { toast('⚠ No valid rows found in CSV'); return; }
+  if (shapes.length > 0 && !confirm(`Clear the ${shapes.length} existing area(s) and import from "${filename}"?`)) return;
+
+  // Phase 2: build zipPrimary, detect conflicts
+  const zipPrimary = {};   // zip → { carrier, terminal }
+  const zipAlts    = {};   // zip → [[carrier, terminal], ...]
+  const conflictGroups = {}; // key → { zips: [], a: {carrier,terminal}, b: {carrier,terminal}, resolution: null }
+
+  for (const { carrier, terminal, zips, alts } of parsedRows) {
+    for (const z of zips) {
+      if (zipPrimary[z] && (zipPrimary[z].carrier !== carrier || zipPrimary[z].terminal !== terminal)) {
+        // Conflict: two rows claim this ZIP as primary
+        const existing = zipPrimary[z];
+        const key = [existing.terminal, terminal].sort().join('\x00');
+        if (!conflictGroups[key]) {
+          conflictGroups[key] = { zips: [], a: existing, b: { carrier, terminal }, resolution: null };
+        }
+        if (!conflictGroups[key].zips.includes(z)) conflictGroups[key].zips.push(z);
+      } else if (!zipPrimary[z]) {
+        zipPrimary[z] = { carrier, terminal };
+      }
+      // Build alt list for this ZIP (from row's alt carriers)
+      if (!zipAlts[z]) zipAlts[z] = [];
+      for (const [ac, at] of alts) {
+        if (!zipAlts[z].some(([c,t]) => c === ac && t === at)) zipAlts[z].push([ac, at]);
+      }
     }
   }
 
-  const carrierNames = carrierOrder.filter(c => carrierGroups[c]);
-  if (!carrierNames.length) { toast('⚠ No carriers found in CSV'); return; }
+  const groupKeys = Object.keys(conflictGroups);
+  if (groupKeys.length > 0) {
+    // Show conflict resolution modal before finalizing
+    showImportConflictModal(conflictGroups, zipPrimary, zipAlts, filename);
+  } else {
+    finalizeServiceImport(zipPrimary, zipAlts, filename);
+  }
+}
 
-  if (shapes.length > 0 && !confirm(`Clear the ${shapes.length} area(s) on the map and import from "${filename}"?`)) return;
+function showImportConflictModal(conflictGroups, zipPrimary, zipAlts, filename) {
+  const keys = Object.keys(conflictGroups);
+  let resolvedCount = 0;
+
+  function updateStatus() {
+    const stat = document.getElementById('conflictResolveStat');
+    const btn  = document.getElementById('conflictFinishImportBtn');
+    stat.textContent = `${resolvedCount} of ${keys.length} group${keys.length>1?'s':''} resolved`;
+    btn.disabled = resolvedCount < keys.length;
+  }
+
+  const list = document.getElementById('conflictGroupList');
+  list.innerHTML = keys.map((key, idx) => {
+    const g = conflictGroups[key];
+    const aLabel = `${g.a.carrier} / ${g.a.terminal}`;
+    const bLabel = `${g.b.carrier} / ${g.b.terminal}`;
+    return `<div class="conflict-group-row" id="cgRow${idx}">
+      <div class="conflict-group-info">
+        <div class="conflict-group-zips">⚠ ${g.zips.length} ZIP${g.zips.length>1?'s':''} overlap</div>
+        <div class="conflict-group-pair"><b>A:</b> ${esc(aLabel)}<br><b>B:</b> ${esc(bLabel)}</div>
+      </div>
+      <div class="conflict-group-btns">
+        <button class="cg-btn" id="cgBtnA${idx}" onclick="resolveConflictGroup(${idx},'a')" title="${esc(aLabel)}">Use A</button>
+        <button class="cg-btn" id="cgBtnB${idx}" onclick="resolveConflictGroup(${idx},'b')" title="${esc(bLabel)}">Use B</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Store state for the resolve function
+  window._pendingConflict = { keys, conflictGroups, zipPrimary, zipAlts, filename,
+    resolved: {}, get count() { return Object.keys(this.resolved).length; } };
+
+  window.resolveConflictGroup = function(idx, choice) {
+    const key = keys[idx];
+    const g = conflictGroups[key];
+    const winner = choice === 'a' ? g.a : g.b;
+    const loser  = choice === 'a' ? g.b : g.a;
+    // Update zipPrimary for all conflicted ZIPs
+    g.zips.forEach(z => {
+      zipPrimary[z] = winner;
+      // Add loser terminal as an alt (merged, deduped)
+      if (!zipAlts[z]) zipAlts[z] = [];
+      if (!zipAlts[z].some(([c,t]) => c === loser.carrier && t === loser.terminal)) {
+        zipAlts[z].unshift([loser.carrier, loser.terminal]); // loser becomes alt1
+      }
+    });
+    // Update UI
+    const row = document.getElementById(`cgRow${idx}`);
+    if (row) { row.classList.add('resolved'); }
+    document.getElementById(`cgBtnA${idx}`).classList.toggle('chosen', choice==='a');
+    document.getElementById(`cgBtnB${idx}`).classList.toggle('chosen', choice==='b');
+    window._pendingConflict.resolved[idx] = choice;
+    resolvedCount = Object.keys(window._pendingConflict.resolved).length;
+    updateStatus();
+  };
+
+  updateStatus();
+  document.getElementById('importConflictBg').classList.add('open');
+
+  document.getElementById('conflictCancelImportBtn').onclick = () => {
+    document.getElementById('importConflictBg').classList.remove('open');
+    window._pendingConflict = null;
+  };
+  document.getElementById('conflictFinishImportBtn').onclick = () => {
+    document.getElementById('importConflictBg').classList.remove('open');
+    const p = window._pendingConflict;
+    window._pendingConflict = null;
+    finalizeServiceImport(p.zipPrimary, p.zipAlts, p.filename);
+  };
+}
+
+function finalizeServiceImport(zipPrimary, zipAlts, filename) {
+  const zipLookup = new Map(zipData.map(z => [z[0], z]));
+
+  // Build carrierGroups from resolved primary assignments
+  const carrierGroups = {};
+  const carrierOrder  = [];
+  for (const [z, { carrier, terminal }] of Object.entries(zipPrimary)) {
+    if (!zipLookup.has(z)) continue;
+    if (!carrierGroups[carrier]) { carrierGroups[carrier] = { terminals: {}, terminalOrder: [] }; carrierOrder.push(carrier); }
+    if (!carrierGroups[carrier].terminals[terminal]) { carrierGroups[carrier].terminals[terminal] = []; carrierGroups[carrier].terminalOrder.push(terminal); }
+    carrierGroups[carrier].terminals[terminal].push(z);
+  }
 
   drawnItems.clearLayers();
   focusDotLayer.clearLayers();
@@ -1643,15 +1920,16 @@ function processServiceAreaCSV(text, filename) {
   shapes = [];
   shapeZips = {};
   zipResult = [];
-  zipAltData = localAltData; // assign after reset — not {}
+  zipAltData = zipAlts;
   showAllMode = true;
+  dotViewMode = false;
   focusedShapeIds.clear();
 
   let imported = 0;
   let colorIdx = 0;
   const allFound = new Set();
 
-  for (const carrierName of carrierNames) {
+  for (const carrierName of carrierOrder) {
     const carrierColor = SHAPE_COLORS[colorIdx % SHAPE_COLORS.length];
     colorIdx++;
     const { terminals, terminalOrder } = carrierGroups[carrierName];
@@ -1660,7 +1938,7 @@ function processServiceAreaCSV(text, filename) {
     for (let ti = 0; ti < terminalOrder.length; ti++) {
       const termName = terminalOrder[ti];
       const color = shades[ti];
-      const termZips = [...terminals[termName]].filter(z => zipLookup.has(z));
+      const termZips = terminals[termName];
       if (!termZips.length) continue;
       termZips.forEach(z => allFound.add(z));
 
@@ -1694,25 +1972,32 @@ function processServiceAreaCSV(text, filename) {
 
       if (!mainLayer) continue;
       shapes.push({ id, layer: mainLayer, extraLayers, color, carrierColor, label: termName, carrier: carrierName, imported: true });
-      shapeZips[id] = termZips.sort();
+      shapeZips[id] = termZips.slice().sort();
       imported++;
     }
   }
 
   zipResult = Array.from(allFound).sort();
   document.getElementById('saveBtn').disabled = !shapes.length;
-  renderShapesBar();
-  renderZipList();
-  computeAndRenderConflicts();
+  const pName = filename.replace(/\.[^.]+$/, '');
+  document.getElementById('projectNameInput').value = pName;
+
+  // Default to dot view after service area import
+  if (shapes.length) {
+    showAllDots();
+  } else {
+    renderShapesBar();
+    renderZipList();
+    computeAndRenderConflicts();
+  }
 
   if (drawnItems.getLayers().length) {
     try { map.fitBounds(drawnItems.getBounds(), { padding: [30, 30] }); } catch(e) {}
   }
 
-  const pName = filename.replace(/\.[^.]+$/, '');
-  document.getElementById('projectNameInput').value = pName;
-  toast(`✓ Imported ${carrierNames.length} carrier${carrierNames.length>1?'s':''} · ${imported} terminals · ${zipResult.length.toLocaleString()} ZIPs`);
-  setStatus(`✓ Imported from "${filename}" · ${imported} terminals across ${carrierNames.length} carriers`, 'ok');
+  const carrierCount = carrierOrder.length;
+  toast(`✓ Imported ${carrierCount} carrier${carrierCount>1?'s':''} · ${imported} terminals · ${zipResult.length.toLocaleString()} ZIPs`);
+  setStatus(`✓ Imported "${filename}" · ${imported} terminals · ${zipResult.length.toLocaleString()} ZIPs`, 'ok');
 }
 
 function parseCSVLine(line) {
